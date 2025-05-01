@@ -205,24 +205,7 @@ valid_lsoas <- c(
   "E01003180", "E01003183", "E01003181", "E01003184", "E01003185", "E01003186", "E01003187", "E01003182", "E01003188"
 )
 
-# Filter the dataset
-library(dplyr)
-library(lubridate)
-
-slsr_clean <- dataset_20250422 %>%
-  filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
-  mutate(
-    dtstrk = as.Date(paste(strk_y, strk_m, strk_d, sep = "-"), format = "%Y-%m-%d")
-  ) %>%
-  filter(
-   # Exclude only if date is within STOP STROKE period *and* not in a valid LSOA
-    !(dtstrk >= as.Date("2004-11-15") & dtstrk <= as.Date("2007-12-31") &
-      !(lsoa11 %in% valid_lsoas))  # Use lsoa11 or the appropriate column
-  )
-# === Other Filters ====
-library(dplyr)
-library(lubridate)
-
+# Filter dataset excluding <20y and unplausible years like >200 and exclusing if date is within STOP STROKE period *and* not in a valid LSOA 
 slsr_clean <- dataset_20250422 %>%
   filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
   mutate(
@@ -232,8 +215,7 @@ slsr_clean <- dataset_20250422 %>%
   filter(
     !is.na(sex),
     !is.na(age),
-    age > 0 & age <= 200,
-    # Exclude only during STOP STROKE expansion *and* if not in valid LSOA
+    age >= 20 & age <= 200,  
     !(dtstrk >= as.Date("2004-11-15") & dtstrk <= as.Date("2007-12-31") &
       !(lsoa11 %in% valid_lsoas))
   )
@@ -358,21 +340,15 @@ european_std_incidence <- standardised_data %>%
   )
 
 # === Final Table with Crude and ESP Incidence ===
-# Rename CIs to avoid conflicts when joining
-crude_incidence <- crude_incidence %>%
-  rename(lower_ci_crude = lower_ci, upper_ci_crude = upper_ci)
-
-european_std_incidence <- european_std_incidence %>%
-  rename(lower_ci_esp = lower_ci, upper_ci_esp = upper_ci)
-
 comparison_table <- stroke_yearly %>%
   left_join(crude_incidence, by = "year") %>%
   left_join(european_std_incidence, by = "year") %>%
   mutate(
-    `Crude IR (local)` = glue("{round(incidence_per_100k, 2)} (95% CI {round(lower_ci_crude, 2)}–{round(upper_ci_crude, 2)})"),
-    `Adjusted IR (Europe)` = glue("{round(std_rate, 2)} (95% CI {round(lower_ci_esp, 2)}–{round(upper_ci_esp, 2)})")
+    `Crude IR (local)` = glue::glue("{round(incidence_per_100k, 2)} (95% CI {round(lower_ci_crude, 2)}–{round(upper_ci_crude, 2)})"),
+    `Adjusted IR (Europe)` = glue::glue("{round(std_rate, 2)} (95% CI {round(lower_ci_esp, 2)}–{round(upper_ci_esp, 2)})")
   ) %>%
   select(year, `Adjusted IR (Europe)`, `Crude IR (local)`)
+
 
 # === Export to Excel with 4 tabs ===
 write_xlsx(
@@ -479,7 +455,7 @@ esp_10yr <- european_std_incidence %>%
   )
 
 # ==== Rendered Summary Tables ====
-
+library(glue)
 rendered_5yr <- crude_5yr %>%
   left_join(esp_5yr, by = "group_5yr") %>%
   mutate(
@@ -511,3 +487,534 @@ write_xlsx(
   ),
   path = "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_summary_5_10yr.xlsx"
 )
+
+# -----------------------------------------------
+# Plotting the yearly crude + standariswed with the 95% CI
+# -----------------------------------------------
+
+plot_data <- bind_rows(
+  crude_incidence %>%
+    select(year, incidence = incidence_per_100k, lower = lower_ci_crude, upper = upper_ci_crude) %>%
+    mutate(label = "Crude incidence"),
+  european_std_incidence %>%
+    select(year, incidence = std_rate, lower = lower_ci_esp, upper = upper_ci_esp) %>%
+    mutate(label = "ESP-standardised incidence")
+)
+
+plot_data_filtered <- plot_data %>%
+  filter(year <= 2024)  # Exclude 2025
+
+ggplot(plot_data_filtered, aes(x = year, y = incidence)) +
+  geom_point(aes(color = label), size = 1.8) +
+  geom_line(aes(color = label), size = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = label), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  scale_color_manual(values = c(
+    "Crude incidence" = "purple",
+    "ESP-standardised incidence" = "deeppink"
+  )) +
+  labs(
+    title = "Annual Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Crude and ESP-standardised estimates with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Rate Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  filename = "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_incidence_faceted.png",
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+#--------------------------------------------------
+# All Stroke totals crude and ESP incidence Sex- especific
+#--------------------------------------------------
+
+# Filter the dataset by sex
+stroke_yearly_sex <- slsr_clean %>%
+  filter(sex %in% c(1, 2)) %>%  # Correct based on codebook
+  mutate(sex_label = ifelse(sex == 1, "Male", "Female")) %>%
+  group_by(year, sex_label) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# Path to population file
+file_path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Totals/Totals/Modified_Population_Summary_Interpolated_and_Projected_1991_2025_FINAL.xlsx"
+
+# Read and tidy male population
+pop_males <- readxl::read_excel(file_path, sheet = "Males_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  filter(Age == "Total", year != "Total") %>%
+  mutate(
+    sex_label = "Male",
+    year = as.integer(year),
+    population = as.numeric(population)
+  )
+
+# Read and tidy female population
+pop_females <- readxl::read_excel(file_path, sheet = "Females_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  filter(Age == "Total", year != "Total") %>%
+  mutate(
+    sex_label = "Female",
+    year = as.integer(year),
+    population = as.numeric(population)
+  )
+
+# Combine
+population_sex_totals <- dplyr::bind_rows(pop_males, pop_females)
+
+# Calculate crude incidence
+crude_incidence_sex <- stroke_yearly_sex %>%
+  left_join(population_sex_totals, by = c("year", "sex_label")) %>%
+  mutate(
+    incidence_per_100k = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = incidence_per_100k - 1.96 * se,
+    upper_ci = incidence_per_100k + 1.96 * se
+  )
+
+crude_incidence_female <- crude_incidence_sex %>%
+  filter(sex_label == "Female") %>%
+  select(year, cases, population, incidence_per_100k, lower_ci, upper_ci)
+
+crude_incidence_male <- crude_incidence_sex %>%
+  filter(sex_label == "Male") %>%
+  select(year, cases, population, incidence_per_100k, lower_ci, upper_ci)
+
+# === ESP sex ====
+
+# Prepare SLSR data
+slsr_age_sex <- slsr_clean %>%
+  filter(age >= 20) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+",
+      TRUE ~ NA_character_
+    ),
+    sex_label = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    year = lubridate::year(dtstrk)
+  ) %>%
+  filter(!is.na(age_group), !is.na(sex_label))
+
+# Count cases by sex and age
+stroke_counts_age_sex <- slsr_age_sex %>%
+  count(year, sex_label, age_group, name = "cases")
+
+# Add population data females and male
+file_path <- "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Totals/Totals/Modified_Population_Summary_Interpolated_and_Projected_1991_2025_FINAL.xlsx"
+
+# Load male population
+pop_male_age <- readxl::read_excel(file_path, sheet = "Males_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  mutate(
+    sex_label = "Male",
+    year = as.integer(year),
+    age_group = gsub(" - ", "-", Age)
+  ) %>%
+  select(year, sex_label, age_group, population)
+
+# Load female population
+pop_female_age <- readxl::read_excel(file_path, sheet = "Females_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  mutate(
+    sex_label = "Female",
+    year = as.integer(year),
+    age_group = gsub(" - ", "-", Age)
+  ) %>%
+  select(year, sex_label, age_group, population)
+
+# Combine into final dataset
+population_age_sex_grouped <- bind_rows(pop_male_age, pop_female_age)
+
+# Create the ESP sex-specific vectors
+esp_male <- tibble::tibble(
+  age_group = c(
+    "0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-34",
+    "35-39", "40-44", "45-49", "50-54", "55-59", "60-64",
+    "65-69", "70-74", "75-79", "80-84", "85+"
+  ),
+  std_pop = c(
+    5000, 5500, 5500, 5500, 6000, 6000, 6500,
+    7000, 7000, 7000, 7000, 6000, 5000,
+    4000, 3000, 2000, 1000, 1000
+  )
+)
+
+esp_female <- tibble::tibble(
+  age_group = c(
+    "0-4", "5-9", "10-14", "15-19", "20-24", "25-29", "30-34",
+    "35-39", "40-44", "45-49", "50-54", "55-59", "60-64",
+    "65-69", "70-74", "75-79", "80-84", "85+"
+  ),
+  std_pop = c(
+    5000, 5500, 5500, 5500, 6000, 6000, 6500,
+    7000, 7000, 7000, 7000, 6000, 5000,
+    4000, 3000, 2000, 1000, 1000
+  )
+)
+
+# Clean age group in std_data and population
+std_data <- std_data %>%
+  mutate(age_group = gsub(" - ", "-", age_group))
+
+population_age_sex_grouped <- population_age_sex_grouped %>%
+  mutate(age_group = gsub(" - ", "-", age_group))
+
+std_data <- stroke_counts_age_sex %>%
+  left_join(population_age_sex_grouped, by = c("year", "sex_label", "age_group"))
+
+population_age_sex_grouped <- population_age_sex_grouped %>%
+  mutate(
+    sex_label = trimws(sex_label),
+    age_group = gsub(" - ", "-", age_group)
+  )
+
+std_data <- std_data %>%
+  mutate(
+    sex_label = trimws(sex_label),
+    age_group = gsub(" - ", "-", age_group)
+  )
+
+# Population is not merging 
+# Fixing years
+population_age_sex_grouped <- population_age_sex_grouped %>%
+  mutate(age_group = gsub("Age ", "", age_group))
+
+#Reloading population
+# Reload from males_yearly and females_yearly
+pop_male_age <- readxl::read_excel(file_path, sheet = "Males_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  mutate(
+    sex_label = "Male",
+    year = as.integer(year),
+    age_group = gsub("Age ", "", Age)
+  ) %>%
+  filter(!is.na(year), year >= 1995) %>%
+  select(year, sex_label, age_group, population)
+
+pop_female_age <- readxl::read_excel(file_path, sheet = "Females_yearly") %>%
+  pivot_longer(-Age, names_to = "year", values_to = "population") %>%
+  mutate(
+    sex_label = "Female",
+    year = as.integer(year),
+    age_group = gsub("Age ", "", Age)
+  ) %>%
+  filter(!is.na(year), year >= 1995) %>%
+  select(year, sex_label, age_group, population)
+
+
+# Combine both
+population_age_sex_grouped <- bind_rows(pop_male_age, pop_female_age)
+
+# Combine stroke cases + population
+std_data <- stroke_counts_age_sex %>%
+  left_join(population_age_sex_grouped, by = c("year", "sex_label", "age_group"))
+
+#Check age and sex match
+setdiff(unique(std_data$age_group), esp_male$age_group)  # Should return character(0)
+unique(std_data$sex_label)  # Should show "Male" and "Female"
+
+# Male
+std_results_male <- std_data %>%
+  filter(sex_label == "Male", age_group %in% esp_male$age_group) %>%
+  left_join(esp_male, by = "age_group") %>%
+  group_by(year) %>%
+  summarise(
+    sex_label = "Male",
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower_ci = std_rate - 1.96 * se,
+    upper_ci = std_rate + 1.96 * se
+  )
+
+# Female
+std_results_female <- std_data %>%
+  filter(sex_label == "Female", age_group %in% esp_female$age_group) %>%
+  left_join(esp_female, by = "age_group") %>%
+  group_by(year) %>%
+  summarise(
+    sex_label = "Female",
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower_ci = std_rate - 1.96 * se,
+    upper_ci = std_rate + 1.96 * se
+  )
+
+# Combine
+esp_sex_standardised <- bind_rows(std_results_male, std_results_female)
+
+# == Rendering the tables ==
+# Rename CIs to avoid overlap
+crude_formatted <- crude_incidence_sex %>%
+  rename(
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+esp_formatted <- esp_sex_standardised %>%
+  rename(
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+# Merge them
+comparison_sex <- crude_formatted %>%
+  left_join(esp_formatted, by = c("year", "sex_label")) %>%
+  mutate(
+    `Crude IR` = glue::glue("{round(incidence_per_100k, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR` = glue::glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(year, sex_label, `Crude IR`, `ESP IR`)
+
+# Female table
+female_table <- comparison_sex %>%
+  filter(sex_label == "Female") %>%
+  select(-sex_label)
+
+# Male table
+male_table <- comparison_sex %>%
+  filter(sex_label == "Male") %>%
+  select(-sex_label)
+
+# === 5 and 10 year tables ===
+crude_5yr <- crude_incidence_sex %>%
+  filter(!is.na(group_5yr)) %>%
+  group_by(sex_label, group_5yr) %>%
+  summarise(
+    cases = sum(cases),
+    population = sum(population),
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = crude_rate - 1.96 * se,
+    upper_ci = crude_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+crude_10yr <- crude_incidence_sex %>%
+  filter(!is.na(group_10yr)) %>%
+  group_by(sex_label, group_10yr) %>%
+  summarise(
+    cases = sum(cases),
+    population = sum(population),
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = crude_rate - 1.96 * se,
+    upper_ci = crude_rate + 1.96 * se,
+    .groups = "drop"
+  )
+esp_5yr <- esp_sex_standardised %>%
+  filter(!is.na(group_5yr)) %>%
+  group_by(sex_label, group_5yr) %>%
+  summarise(
+    mean_std_rate = mean(std_rate, na.rm = TRUE),
+    se = sqrt(sum(se^2, na.rm = TRUE)) / n(),
+    lower_ci = mean_std_rate - 1.96 * se,
+    upper_ci = mean_std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+esp_10yr <- esp_sex_standardised %>%
+  filter(!is.na(group_10yr)) %>%
+  group_by(sex_label, group_10yr) %>%
+  summarise(
+    mean_std_rate = mean(std_rate, na.rm = TRUE),
+    se = sqrt(sum(se^2, na.rm = TRUE)) / n(),
+    lower_ci = mean_std_rate - 1.96 * se,
+    upper_ci = mean_std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# == Rendering ==
+library(dplyr)
+library(glue)
+
+# Female: 5-Year 
+female_rendered_5yr <- crude_5yr %>%
+  filter(sex_label == "Female") %>%
+  left_join(esp_5yr %>% filter(sex_label == "Female"), by = "group_5yr") %>%
+  mutate(
+    `Crude IR (local)` = glue("{round(crude_rate, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `Adjusted IR (Europe)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`5-Year Interval` = group_5yr, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+# Male: 5-Year 
+male_rendered_5yr <- crude_5yr %>%
+  filter(sex_label == "Male") %>%
+  left_join(esp_5yr %>% filter(sex_label == "Male"), by = "group_5yr") %>%
+  mutate(
+    `Crude IR (local)` = glue("{round(crude_rate, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `Adjusted IR (Europe)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`5-Year Interval` = group_5yr, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+# Female: 10-Year
+female_rendered_10yr <- crude_10yr %>%
+  filter(sex_label == "Female") %>%
+  left_join(esp_10yr %>% filter(sex_label == "Female"), by = "group_10yr") %>%
+  mutate(
+    `Crude IR (local)` = glue("{round(crude_rate, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `Adjusted IR (Europe)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`10-Year Interval` = group_10yr, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+# Male: 10-Year
+male_rendered_10yr <- crude_10yr %>%
+  filter(sex_label == "Male") %>%
+  left_join(esp_10yr %>% filter(sex_label == "Male"), by = "group_10yr") %>%
+  mutate(
+    `Crude IR (local)` = glue("{round(crude_rate, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `Adjusted IR (Europe)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`10-Year Interval` = group_10yr, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+library(writexl)
+
+write_xlsx(
+  list(
+    "Crude_Female_Yearly" = crude_incidence_female,
+    "Crude_Male_Yearly" = crude_incidence_male,
+    "ESP_Female_Yearly" = std_results_female,
+    "ESP_Male_Yearly" = std_results_male,
+    "Rendered_Female_Yearly" = female_table,
+    "Rendered_Male_Yearly" = male_table,
+    "Rendered_Female_5yr" = female_rendered_5yr,
+    "Rendered_Male_5yr" = male_rendered_5yr,
+    "Rendered_Female_10yr" = female_rendered_10yr,
+    "Rendered_Male_10yr" = male_rendered_10yr
+  ),
+  path = "stroke_incidence_sex_specific_summary.xlsx"
+)
+
+# === Plotting ===
+
+# ==First plot ==
+
+library(dplyr)
+
+# Combine crude and ESP into one plotting dataframe
+plot_data_sex <- crude_formatted %>%
+  select(year, sex_label, crude_rate = incidence_per_100k, lower_crude = lower_ci_crude, upper_crude = upper_ci_crude) %>%
+  full_join(
+    esp_formatted %>%
+      select(year, sex_label, std_rate, lower_esp = lower_ci_esp, upper_esp = upper_ci_esp),
+    by = c("year", "sex_label")
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(crude_rate, std_rate),
+    names_to = "measure",
+    values_to = "incidence"
+  ) %>%
+  mutate(
+    lower = ifelse(measure == "crude_rate", lower_crude, lower_esp),
+    upper = ifelse(measure == "crude_rate", upper_crude, upper_esp),
+    label = case_when(
+      measure == "crude_rate" ~ "Crude incidence",
+      measure == "std_rate" ~ "ESP-standardised incidence"
+    )
+  ) %>%
+  filter(year < 2025)  # Optional: drop 2025
+
+library(ggplot2)
+
+ggplot(plot_data_sex, aes(x = year, y = incidence, color = label)) +
+  geom_line(size = 0.8) +
+  geom_point(size = 1.8) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.4, size = 0.6) +
+  facet_wrap(~ sex_label, ncol = 1, scales = "free_y") +
+  scale_color_manual(values = c(
+    "Crude incidence" = "purple",
+    "ESP-standardised incidence" = "deeppink"
+  )) +
+  labs(
+    title = "Stroke Incidence per 100,000 by Sex (1995–2024)",
+    subtitle = "Crude and ESP-standardised with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Measure"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+
+
+# == Second plot ==
+library(dplyr)
+library(tidyr)
+
+plot_data_compare <- crude_formatted %>%
+  select(year, sex_label, crude_rate = incidence_per_100k, lower_crude = lower_ci_crude, upper_crude = upper_ci_crude) %>%
+  full_join(
+    esp_formatted %>%
+      select(year, sex_label, std_rate, lower_esp = lower_ci_esp, upper_esp = upper_ci_esp),
+    by = c("year", "sex_label")
+  ) %>%
+  pivot_longer(
+    cols = c(crude_rate, std_rate),
+    names_to = "measure",
+    values_to = "incidence"
+  ) %>%
+  mutate(
+    lower = ifelse(measure == "crude_rate", lower_crude, lower_esp),
+    upper = ifelse(measure == "crude_rate", upper_crude, upper_esp),
+    label = case_when(
+      measure == "crude_rate" ~ "Crude incidence",
+      measure == "std_rate" ~ "ESP-standardised incidence"
+    )
+  ) %>%
+  filter(year < 2025)  # Optional: drop 2025
+ggplot(plot_data_compare, aes(x = year, y = incidence, color = sex_label)) +
+  geom_line(size = 0.9) +
+  geom_point(size = 1.8) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_color_manual(values = c("Female" = "#de77ae", "Male" = "#7fbc41")) +
+  labs(
+    title = "Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Comparison by Sex: Crude and ESP-standardised Rates with 95% CI",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
