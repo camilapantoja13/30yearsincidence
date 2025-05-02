@@ -1461,3 +1461,58 @@ write_xlsx(
   path = "subarachnoid_stroke_incidence.xlsx"
 )
 
+
+# === Plot ====
+library(dplyr)
+library(ggplot2)
+
+# --- Prepare Crude Data ---
+plot_crude_type <- crude_incidence_type_clean %>%
+  mutate(
+    label = "Crude incidence",
+    incidence = crude_rate,
+    lower = lower_ci_crude,
+    upper = upper_ci_crude
+  ) %>%
+  select(year, stroke_type, label, incidence, lower, upper)
+
+# --- Prepare ESP-Standardised Data ---
+plot_esp_type <- esp_std_type_clean %>%
+  mutate(
+    label = "ESP-standardised incidence",
+    incidence = std_rate,
+    lower = lower_ci_esp,
+    upper = upper_ci_esp
+  ) %>%
+  select(year, stroke_type, label, incidence, lower, upper)
+
+# --- Combine and Filter Out 2025 ---
+plot_data_type <- bind_rows(plot_crude_type, plot_esp_type) %>%
+  filter(year <= 2024)
+
+# --- Plot ---
+ggplot(plot_data_type, aes(x = year, y = incidence, color = stroke_type)) +
+  geom_line(size = 1) +
+  geom_point(size = 1.8) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.4, size = 0.5) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_color_manual(values = c(
+    "Subarachnoid" = "#1b9e77",
+    "Haemorrhagic" = "#7570b3",
+    "Ischaemic" = "#e7298a"
+  )) +
+  labs(
+    title = "Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "By Stroke Type: Crude and ESP-standardised with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Stroke Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
+
