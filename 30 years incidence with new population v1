@@ -745,4 +745,43 @@ output_list <- list(
 # Save to Excel
 write_xlsx(output_list, path = "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/sex_specific_stroke_incidence.xlsx")
 
+# -----------------------------------------------
+# All strokes by ethnicity
+# -----------------------------------------------
+
+# Extract ethnicity from your cleaned dataset
+slsr_clean <- slsr_clean %>%
+  mutate(
+    ethnicity = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat == 4 ~ "Black Other",
+      eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity))
+
+# Count strokes by year and ethnicity
+stroke_yearly_ethnicity <- slsr_clean %>%
+  group_by(year, ethnicity) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# Load and clean population by ethnicity
+population_ethnicity <- read.csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_ethnicity.csv"
+) %>%
+  rename(
+    year = Year,
+    ethnicity = Ethnicity,
+    population = Total
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    ethnicity = trimws(ethnicity),
+    population = as.numeric(population)
+  ) %>%
+  filter(year >= 1995, year <= 2024)
+
 
