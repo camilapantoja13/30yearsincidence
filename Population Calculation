@@ -1,0 +1,408 @@
+# === Cleaning 1991 file ===
+# Load necessary libraries
+library(readxl)
+library(dplyr)
+library(tidyr)
+
+# Load the data
+df_1991 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/1991.tsv")
+
+# Extracting age group
+library(stringr)
+library(dplyr)
+
+df_1991 <- df_1991 %>%
+  mutate(
+    # Extract any pattern that looks like 0 - 4, 15, etc.
+    `Age Range` = str_extract(cell, "aged\\s+\\d{1,2}(\\s*-\\s*\\d{1,2})?"),
+    `Age Range` = str_remove(`Age Range`, "aged\\s+"),  # Remove the word "aged"
+    `Age Range` = str_replace_all(`Age Range`, "\\s*", ""),  # Remove spaces like "0 - 4" → "0-4"
+    `Age Range` = ifelse(str_detect(cell, "85"), "85+", `Age Range`)  # Normalize "85 and over"
+  )
+df_1991_filtered <- df_1991 %>%
+  filter(!is.na(`Age Range`))
+
+# Dropping the totals
+df_1991_filtered <- df_1991_filtered %>%
+  filter(!str_detect(cell, "Total persons"))
+
+df_1991_filtered <- df_1991_filtered %>%
+  filter(!str_detect(`1991 frozen ward`, regex("total|sum|all", ignore_case = TRUE)))
+
+# Extracting sex and ethnicity
+df_1991_filtered <- df_1991_filtered %>%
+  mutate(
+    # Extract Sex
+    Sex = case_when(
+      str_detect(cell, "Males") ~ "Male",
+      str_detect(cell, "Females") ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    
+    # Classify Ethnicity
+    Ethnicity = case_when(
+      str_detect(cell, "White") ~ "White",
+      str_detect(cell, "Black African") ~ "Black African",
+      str_detect(cell, "Black Carribean") ~ "Black Caribbean",
+      str_detect(cell, "Black other") ~ "Black Other",
+      str_detect(cell, "Ethnic group") ~ "Other",  # All others explicitly labeled as ethnic group
+      TRUE ~ NA_character_
+    )
+  )
+
+# Summarise
+summary_1991 <- df_1991_filtered %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  summarise(
+    Total = sum(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Summarise into 3 tables
+library(writexl)
+
+summary_ethnicity_age <- summary_1991 %>%
+  group_by(Ethnicity, `Age Range`) %>%
+  summarise(
+    Total = sum(Total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_female <- summary_1991 %>%
+  filter(Sex == "Female")
+
+summary_male <- summary_1991 %>%
+  filter(Sex == "Male")
+
+# Export
+write_xlsx(
+  list(
+    Total = summary_ethnicity_age,
+    Female = summary_female,
+    Male = summary_male
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_by_sex_ethnicity_age.xlsx"
+)
+
+# Creating a long format one
+summary_long <- summary_1991 %>%
+  mutate(Year = 1991) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, Total)
+
+# Save
+write_csv(summary_long, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_long.csv")
+
+# === Cleaning 2001 Census ===
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+
+
+library(readxl)
+
+# Load the Excel version of 2001 census data
+df_2001 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2001.xlsx")
+
+# Step 1: Filter out totals (like "All categories: Age")
+df_2001_filtered <- df_2001 %>%
+  filter(!str_detect(Age, "All categories"))
+
+df_2001_filtered <- df_2001 %>%
+  filter(
+    !str_detect(Age, "All categories"),  # remove age totals
+    !str_detect(`Ethnic Group`, "All categories")  # remove ethnic group totals
+  )
+# Step 2: Extract and clean Age Range
+df_2001_filtered <- df_2001_filtered %>%
+  mutate(
+    `Age Range` = str_extract(Age, "\\d{1,2}\\s+to\\s+\\d{1,2}|\\d{1,2}"),
+    `Age Range` = str_replace_all(`Age Range`, " to ", "-"),
+    `Age Range` = ifelse(str_detect(Age, "90 and over|85 to 89"), "85+", `Age Range`)
+  )
+
+library(writexl)
+
+# Summarise into 3 tables
+summary_ethnicity_age_2001 <- summary_2001 %>%
+  group_by(Ethnicity, `Age Range`) %>%
+  summarise(
+    Total = sum(Total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_female_2001 <- summary_2001 %>%
+  filter(Sex == "Females")
+
+summary_male_2001 <- summary_2001 %>%
+  filter(Sex == "Males")
+
+# Export to Excel with 3 tabs
+write_xlsx(
+  list(
+    Total = summary_ethnicity_age_2001,
+    Female = summary_female_2001,
+    Male = summary_male_2001
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2001_summary_by_sex_ethnicity_age.xlsx"
+)
+
+# Long format export
+summary_long_2001 <- summary_2001 %>%
+
+# Save
+write_csv(summary_long_2001, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2001_summary_long.csv")
+
+# === Cleaning 2011 Census ===
+library(readxl)
+
+# Import the file
+df_2011 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2011.xlsx")
+
+# Filter out the totals
+# Step 1: Filter out totals
+df_2011_filtered <- df_2011 %>%
+  filter(
+    !str_detect(Age, "All categories"),  # remove age totals
+    !str_detect(`Ethnic Grou`, "All categories")  # remove ethnicity totals
+  )
+
+# Step 2: Clean Age Range
+df_2011_filtered <- df_2011_filtered %>%
+  mutate(
+    `Age Range` = str_extract(Age, "\\d{1,2}\\s+to\\s+\\d{1,2}|\\d{1,2}"),
+    `Age Range` = str_replace_all(`Age Range`, " to ", "-"),
+    `Age Range` = ifelse(str_detect(Age, "90 and over|85 to 89"), "85+", `Age Range`)
+  )
+
+# Step 3: Recode Ethnicity using 2011 structure
+df_2011_filtered <- df_2011_filtered %>%
+  mutate(
+    Ethnicity = case_when(
+      str_detect(`Ethnic Grou`, "White") ~ "White",
+      str_detect(`Ethnic Grou`, "Black/African/Caribbean/Black British: African") ~ "Black African",
+      str_detect(`Ethnic Grou`, "Black/African/Caribbean/Black British: Caribbean") ~ "Black Caribbean",
+      str_detect(`Ethnic Grou`, "Black/African/Caribbean/Black British: Other Black") ~ "Black Other",
+      TRUE ~ "Other"
+    )
+  )
+
+# Step 4: Standardise Sex
+df_2011_filtered <- df_2011_filtered %>%
+  mutate(
+    Sex = case_when(
+      Sex == "Males" ~ "Male",
+      Sex == "Females" ~ "Female",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Step 5: Summarise
+summary_2011 <- df_2011_filtered %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  summarise(Total = sum(value, na.rm = TRUE), .groups = "drop")
+
+# Export Excel (3 sheets)
+summary_ethnicity_age_2011 <- summary_2011 %>%
+  group_by(Ethnicity, `Age Range`) %>%
+  summarise(Total = sum(Total), .groups = "drop")
+
+summary_female_2011 <- summary_2011 %>% filter(Sex == "Female")
+summary_male_2011 <- summary_2011 %>% filter(Sex == "Male")
+
+write_xlsx(
+  list(
+    Total = summary_ethnicity_age_2011,
+    Female = summary_female_2011,
+    Male = summary_male_2011
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2011_summary_by_sex_ethnicity_age.xlsx"
+)
+
+# Long-format for interpolation
+summary_long_2011 <- summary_2011 %>%
+  mutate(Year = 2011) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, Total)
+
+write_csv(summary_long_2011, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2011_summary_long.csv")
+
+# === Cleaning 2021 Census ===
+
+library(readxl)
+excel_sheets("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx")
+df_2021 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx", sheet = 1)
+glimpse(df_2021)
+
+library(readxl)
+library(dplyr)
+library(stringr)
+library(tidyr)
+
+# Load the data
+df_2021 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx")
+
+# Step 1: Clean column names
+names(df_2021) <- make.names(names(df_2021))  # standardize column names
+
+# Step 2: Create Age Ranges
+df_2021 <- df_2021 %>%
+  mutate(
+    `Age Range` = case_when(
+      Age..86.categories..Code >= 0  & Age..86.categories..Code <= 4   ~ "0-4",
+      Age..86.categories..Code >= 5  & Age..86.categories..Code <= 9   ~ "5-9",
+      Age..86.categories..Code >= 10 & Age..86.categories..Code <= 14  ~ "10-14",
+      Age..86.categories..Code == 15 ~ "15",
+      Age..86.categories..Code >= 16 & Age..86.categories..Code <= 17  ~ "16-17",
+      Age..86.categories..Code >= 18 & Age..86.categories..Code <= 19  ~ "18-19",
+      Age..86.categories..Code >= 20 & Age..86.categories..Code <= 24  ~ "20-24",
+      Age..86.categories..Code >= 25 & Age..86.categories..Code <= 29  ~ "25-29",
+      Age..86.categories..Code >= 30 & Age..86.categories..Code <= 34  ~ "30-34",
+      Age..86.categories..Code >= 35 & Age..86.categories..Code <= 39  ~ "35-39",
+      Age..86.categories..Code >= 40 & Age..86.categories..Code <= 44  ~ "40-44",
+      Age..86.categories..Code >= 45 & Age..86.categories..Code <= 49  ~ "45-49",
+      Age..86.categories..Code >= 50 & Age..86.categories..Code <= 54  ~ "50-54",
+      Age..86.categories..Code >= 55 & Age..86.categories..Code <= 59  ~ "55-59",
+      Age..86.categories..Code >= 60 & Age..86.categories..Code <= 64  ~ "60-64",
+      Age..86.categories..Code >= 65 & Age..86.categories..Code <= 69  ~ "65-69",
+      Age..86.categories..Code >= 70 & Age..86.categories..Code <= 74  ~ "70-74",
+      Age..86.categories..Code >= 75 & Age..86.categories..Code <= 79  ~ "75-79",
+      Age..86.categories..Code >= 80 & Age..86.categories..Code <= 84  ~ "80-84",
+      Age..86.categories..Code >= 85                                  ~ "85+",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Step 3: Recode Ethnicity
+df_2021 <- df_2021 %>%
+  mutate(
+    Ethnicity = case_when(
+      str_detect(Ethnic.group..20.categories., "^White") ~ "White",
+      str_detect(Ethnic.group..20.categories., "Caribbean$") ~ "Black Caribbean",
+      str_detect(Ethnic.group..20.categories., "African$") ~ "Black African",
+      str_detect(Ethnic.group..20.categories., "Other Black$") ~ "Black Other",
+      TRUE ~ "Other"
+    )
+  )
+# Step 4: Standardise Sex
+df_2021 <- df_2021 %>%
+  mutate(
+    Sex = case_when(
+      Sex..2.categories. == "Male" ~ "Male",
+      Sex..2.categories. == "Female" ~ "Female",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Step 5: Summarise
+summary_2021 <- df_2021 %>%
+  filter(!is.na(`Age Range`)) %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  summarise(Total = sum(Observation, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Year = 2021) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, Total)
+
+# === Interpolate and extrapolate ===
+summary_long_1991  # from 1991
+summary_long_2001  # from 2001
+summary_long_2011  # from 2011
+summary_long_2021  # from 2021
+
+#Binding
+summary_all_years <- bind_rows(
+  summary_long_1991,
+  summary_long_2001,
+  summary_long_2011,
+  summary_long_2021
+)
+
+# Finding inconsistencies
+summary_all_years %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  summarise(n_years = n_distinct(Year), .groups = "drop") %>%
+  filter(n_years < 4) %>%
+  arrange(desc(n_years))
+
+unique(summary_all_years$`Age Range`)
+unique(summary_all_years$Ethnicity)
+unique(summary_all_years$Sex)
+
+library(dplyr)
+library(stringr)
+
+summary_all_years <- summary_all_years %>%
+  mutate(
+    # Standardize Age Ranges
+    `Age Range` = case_when(
+      `Age Range` %in% c("5-7", "8-9") ~ "5-9",
+      `Age Range` == "85" ~ "85+",
+      TRUE ~ `Age Range`
+    ),
+    `Age Range` = str_replace_all(`Age Range`, "[–—]", "-"),  # fix dash types if any
+    `Age Range` = str_trim(`Age Range`),
+    
+    # Standardize Sex
+    Sex = case_when(
+      str_to_lower(Sex) %in% c("female", "females") ~ "Female",
+      str_to_lower(Sex) %in% c("male", "males") ~ "Male",
+      TRUE ~ Sex
+    )
+  )
+
+summary_all_years %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  summarise(n_years = n_distinct(Year), .groups = "drop") %>%
+  filter(n_years < 4)
+
+# Missing
+summary_all_years <- summary_all_years %>%
+  add_row(Year = 1991, Sex = "Female", Ethnicity = "Black Other", `Age Range` = "75-79", Total = NA) %>%
+  add_row(Year = 1991, Sex = "Male", Ethnicity = "Black Other", `Age Range` = "55-59", Total = NA)
+
+summary_interpolated <- summary_all_years %>%
+  complete(
+    Year = full_seq(1991:2024, 1),
+    nesting(Sex, Ethnicity, `Age Range`)
+  ) %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  arrange(Year) %>%
+  mutate(
+    Total_interp = approx(Year[!is.na(Total)], Total[!is.na(Total)], xout = Year, rule = 2)$y
+  ) %>%
+  ungroup()
+
+# Plot them
+library(ggplot2)
+
+plot_data <- summary_interpolated %>%
+  group_by(Year, Ethnicity) %>%
+  summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop")
+ggplot(plot_data, aes(x = Year, y = Total, color = Ethnicity)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Population by Ethnicity (1991–2024)",
+    y = "Total Population",
+    x = "Year",
+    color = "Ethnicity"
+  ) +
+  theme_minimal()
+
+# Sex
+female_totals <- summary_interpolated %>%
+  filter(Sex == "Female") %>%
+  group_by(Year) %>%
+  summarise(Total_Females = sum(Total_interp, na.rm = TRUE))
+
+male_totals <- summary_interpolated %>%
+  filter(Sex == "Male") %>%
+  group_by(Year) %>%
+  summarise(Total_Males = sum(Total_interp, na.rm = TRUE))
+
+#Total per year
+total_population <- summary_interpolated %>%
+  group_by(Year) %>%
+  summarise(Total_Population = sum(Total_interp, na.rm = TRUE))
+combined_totals <- summary_interpolated %>%
+  group_by(Year, Sex) %>%
+  summarise(Total_Population = sum(Total_interp, na.rm = TRUE), .groups = "drop")
+
+
