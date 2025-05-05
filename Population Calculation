@@ -405,4 +405,124 @@ combined_totals <- summary_interpolated %>%
   group_by(Year, Sex) %>%
   summarise(Total_Population = sum(Total_interp, na.rm = TRUE), .groups = "drop")
 
+# === Fix extrapolation ===
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+# Step 1: Create full grid
+full_grid <- summary_all_years %>%
+  complete(
+    Year = full_seq(1991:2024, 1),
+    nesting(Sex, Ethnicity, `Age Range`)
+  )
+
+# Step 2: Interpolate 1991–2021 + Extrapolate 2022–2024 linearly
+summary_interpolated <- full_grid %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  arrange(Year) %>%
+  group_split() %>%
+  map_dfr(function(df) {
+    # Extract known values
+    known <- df %>% filter(!is.na(Total))
+    
+    if (nrow(known) >= 2) {
+      # Linear interpolation for all years in the full range
+      interpolated <- approx(
+        x = known$Year,
+        y = known$Total,
+        xout = df$Year,
+        method = "linear",
+        rule = 1,  # NA outside range
+        ties = mean
+      )
+      
+      # Estimate slope from last two known years
+      last_two <- tail(known, 2)
+      slope <- diff(last_two$Total) / diff(last_two$Year)
+      final_year <- max(known$Year)
+      
+      # Extrapolate beyond last known year
+      df <- df %>%
+        mutate(
+          Total_interp = ifelse(
+            Year <= final_year,
+            interpolated$y,
+            last_two$Total[2] + slope * (Year - final_year)
+          )
+        )
+    } else {
+      df$Total_interp <- NA
+    }
+    return(df)
+  }) %>%
+  ungroup()
+
+#Total per year
+total_population <- summary_interpolated %>%
+  group_by(Year) %>%
+  summarise(Total_Population = sum(Total_interp, na.rm = TRUE))
+combined_totals <- summary_interpolated %>%
+  group_by(Year, Sex) %>%
+  summarise(Total_Population = sum(Total_interp, na.rm = TRUE), .groups = "drop")
+
+female_totals <- summary_interpolated %>%
+  filter(Sex == "Female") %>%
+  group_by(Year) %>%
+  summarise(Total_Females = sum(Total_interp, na.rm = TRUE))
+
+male_totals <- summary_interpolated %>%
+  filter(Sex == "Male") %>%
+  group_by(Year) %>%
+  summarise(Total_Males = sum(Total_interp, na.rm = TRUE))
+
+summary_interpolated %>%
+  group_by(Year, Ethnicity) %>%
+  summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop")
+
+# Save everything
+# Set base path
+save_path <- "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R"
+
+# Total population by year
+write_csv(total_population, file.path(save_path, "population_total.csv"))
+
+# Sex-specific totals by year
+write_csv(combined_totals, file.path(save_path, "population_by_sex.csv"))
+
+# Ethnicity totals by year
+write_csv(
+  summary_interpolated %>%
+    group_by(Year, Ethnicity) %>%
+    summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop"),
+  file.path(save_path, "population_by_ethnicity.csv")
+)
+
+# Ethnicity by sex by year
+write_csv(
+  summary_interpolated %>%
+    group_by(Year, Ethnicity, Sex) %>%
+    summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop"),
+  file.path(save_path, "population_by_ethnicity_sex.csv")
+)
+
+# Full interpolated table (includes age)
+write_csv(summary_interpolated, file.path(save_path, "summary_interpolated_full.csv"))
+
+# Age breakdown: population by year and age range
+write_csv(
+  summary_interpolated %>%
+    group_by(Year, `Age Range`) %>%
+    summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop"),
+  file.path(save_path, "population_by_age.csv")
+)
+
+# Age × Sex × Ethnicity (most detailed stratification)
+write_csv(
+  summary_interpolated %>%
+    group_by(Year, Sex, Ethnicity, `Age Range`) %>%
+    summarise(Total = sum(Total_interp, na.rm = TRUE), .groups = "drop"),
+  file.path(save_path, "population_by_age_ethnicity_sex.csv")
+)
+
 
