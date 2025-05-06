@@ -264,3 +264,395 @@ write_xlsx(
   path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_incidence_ethnicity_rendered.xlsx"
 )
 
+# === 5 years analysis === 
+
+# Define 5-year intervals
+stroke_age_ethnicity_counts_fixed <- stroke_age_ethnicity_counts_fixed %>%
+  mutate(
+    period_5 = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    )
+  )
+
+population_age_ethnicity <- population_age_ethnicity %>%
+  mutate(
+    period_5 = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    )
+  )
+# Aggregate stroke cases and population
+esp_ethnicity_5yr <- stroke_age_ethnicity_counts_fixed %>%
+  left_join(population_age_ethnicity, by = c("period_5", "age_group", "ethnicity")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0) %>%
+  group_by(period_5, ethnicity) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# -----------------------------------------------
+# Trying to check my results
+# -----------------------------------------------
+# Grouping Black and White
+slsr_clean <- slsr_clean %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat %in% 2:4 ~ "Black",
+      eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(ethnicity_group %in% c("White", "Black"))  # Only keep White and Black
+
+# Stroke counts
+stroke_counts_white_black <- slsr_clean %>%
+  filter(age >= 20) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    ),
+    year = lubridate::year(dtstrk),
+    period_2yr = cut(
+      year,
+      breaks = seq(1995, 2025, by = 2),
+      right = FALSE,
+      include.lowest = TRUE,
+      labels = c("1995–1996", "1997–1998", "1999–2000", "2001–2002", "2003–2004",
+                 "2005–2006", "2007–2008", "2009–2010", "2011–2012", "2013–2014",
+                 "2015–2016", "2017–2018", "2019–2020", "2021–2022", "2023–2024")
+    )
+  ) %>%
+  filter(!is.na(age_group), !is.na(period_2yr)) %>%
+  count(period_2yr, ethnicity_group, age_group, name = "cases")
+# Collapse into 2y
+population_2yr <- population_age_ethnicity %>%
+  filter(ethnicity %in% c("White", "Black African", "Black Caribbean", "Black Other")) %>%
+  mutate(
+    ethnicity_group = case_when(
+      ethnicity == "White" ~ "White",
+      TRUE ~ "Black"
+    ),
+    period_2yr = cut(
+      year,
+      breaks = seq(1995, 2025, by = 2),
+      right = FALSE,
+      include.lowest = TRUE,
+      labels = c("1995–1996", "1997–1998", "1999–2000", "2001–2002", "2003–2004",
+                 "2005–2006", "2007–2008", "2009–2010", "2011–2012", "2013–2014",
+                 "2015–2016", "2017–2018", "2019–2020", "2021–2022", "2023–2024")
+    )
+  ) %>%
+  group_by(period_2yr, ethnicity_group, age_group) %>%
+  summarise(population = sum(population, na.rm = TRUE), .groups = "drop")
+esp <- tibble::tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+                "80-84", "85+"),
+  std_pop = c(6000, 6000, 6500, 7000, 7000, 7000,
+              7000, 6000, 5000, 4000, 3000, 2000, 1000, 1000)
+)
+esp_white_black_2yr <- stroke_counts_white_black %>%
+  left_join(population_2yr, by = c("period_2yr", "age_group", "ethnicity_group")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0) %>%
+  group_by(period_2yr, ethnicity_group) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# -----------------------------------------------
+# White / Black African / Black Caribbean / Other
+# -----------------------------------------------
+
+library(dplyr)
+library(lubridate)
+
+slsr_clean <- slsr_clean %>%
+  mutate(
+    year = year(dtstrk),
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat == 5 ~ "Other",  # exclude eth6cat == 4 (Black Other)
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity_group))
+
+# Crude incidence
+# Stroke counts
+stroke_yearly_ethnicity_4groups <- slsr_clean %>%
+  count(year, ethnicity_group, name = "cases")
+
+# Population
+population_ethnicity_4groups <- population_ethnicity %>%
+  filter(ethnicity %in% c("White", "Black Caribbean", "Black African", "Other")) %>%
+  rename(
+    year = year,
+    ethnicity_group = ethnicity,
+    population = population
+  )
+
+# Crude incidence
+crude_4groups <- stroke_yearly_ethnicity_4groups %>%
+  left_join(population_ethnicity_4groups, by = c("year", "ethnicity_group")) %>%
+  mutate(
+    incidence_per_100k = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, incidence_per_100k - 1.96 * se),
+    upper_ci = incidence_per_100k + 1.96 * se
+  )
+
+# ESP
+# Stroke counts by age group
+stroke_ethnicity_age_4groups <- slsr_clean %>%
+  filter(age >= 20) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  ) %>%
+  count(year, ethnicity_group, age_group, name = "cases")
+
+# ESP weights
+esp <- tibble::tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+                "80-84", "85+"),
+  std_pop = c(6000, 6000, 6500, 7000, 7000, 7000,
+              7000, 6000, 5000, 4000, 3000, 2000, 1000, 1000)
+)
+
+# Population by age & ethnicity
+population_ethnicity_age_4groups <- population_age_ethnicity %>%
+  filter(ethnicity %in% c("White", "Black Caribbean", "Black African", "Other")) %>%
+  rename(
+    year = year,
+    ethnicity_group = ethnicity,
+    age_group = `age_group`
+  )
+
+# ESP calculation
+esp_4groups <- stroke_ethnicity_age_4groups %>%
+  left_join(population_ethnicity_age_4groups, by = c("year", "age_group", "ethnicity_group")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), population > 0) %>%
+  group_by(year, ethnicity_group) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Rendering
+library(dplyr)
+library(glue)
+
+# Clean and rename columns
+crude_ethnicity_4groups_clean <- crude_4groups %>%
+  rename(
+    crude_rate = incidence_per_100k,
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+esp_ethnicity_4groups_clean <- esp_4groups%>%
+  rename(
+    std_rate = std_rate,
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+rendered_ethnicity_4groups <- crude_ethnicity_4groups_clean %>%
+  left_join(esp_ethnicity_4groups_clean, by = c("year", "ethnicity_group")) %>%
+  mutate(
+    `Crude IR` = glue("{round(crude_rate, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR`   = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(year, ethnicity_group, `Crude IR`, `ESP IR`)
+
+library(writexl)
+
+write_xlsx(
+  list(
+    "Crude Incidence"    = crude_ethnicity_4groups_clean,
+    "ESP Incidence"      = esp_ethnicity_4groups_clean,
+    "Rendered Stroke Incidence" = rendered_ethnicity_4groups
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/ethnicity_4groups_rendered.xlsx"
+)
+
+# == By 2, 5 and 10 years ==
+# Assign 2-, 5-, and 10-year groups
+crude_ethnicity_4groups_clean <- crude_ethnicity_4groups_clean %>%
+  mutate(
+    period_2yr = cut(year, breaks = seq(1995, 2025, 2), right = FALSE,
+                     labels = paste(seq(1995, 2023, 2), seq(1996, 2024, 2), sep = "–")),
+    period_5yr = cut(year, breaks = c(1995, 2000, 2005, 2010, 2015, 2020, 2025), right = FALSE,
+                     labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024")),
+    period_10yr = cut(year, breaks = c(1995, 2005, 2015, 2025), right = FALSE,
+                      labels = c("1995–2004", "2005–2014", "2015–2024"))
+  )
+
+esp_ethnicity_4groups_clean <- esp_ethnicity_4groups_clean %>%
+  mutate(
+    period_2yr = cut(year, breaks = seq(1995, 2025, 2), right = FALSE,
+                     labels = paste(seq(1995, 2023, 2), seq(1996, 2024, 2), sep = "–")),
+    period_5yr = cut(year, breaks = c(1995, 2000, 2005, 2010, 2015, 2020, 2025), right = FALSE,
+                     labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024")),
+    period_10yr = cut(year, breaks = c(1995, 2005, 2015, 2025), right = FALSE,
+                      labels = c("1995–2004", "2005–2014", "2015–2024"))
+  )
+
+# Summarising
+summarise_grouped_incidence <- function(data, period_col) {
+  data %>%
+    group_by(ethnicity_group, .data[[period_col]]) %>%
+    summarise(
+      cases = sum(cases, na.rm = TRUE),
+      population = sum(population, na.rm = TRUE),
+      crude_rate = (cases / population) * 100000,
+      se = sqrt(cases) / population * 100000,
+      lower_ci_crude = pmax(0, crude_rate - 1.96 * se),
+      upper_ci_crude = crude_rate + 1.96 * se,
+      .groups = "drop"
+    )
+}
+
+
+esp_2yr <- summarise_grouped_esp(esp_ethnicity_4groups_clean, "period_2yr")
+esp_5yr <- summarise_grouped_esp(esp_ethnicity_4groups_clean, "period_5yr")
+esp_10yr <- summarise_grouped_esp(esp_ethnicity_4groups_clean, "period_10yr")
+
+library(glue)
+
+rendered_2yr <- crude_2yr_summary %>%
+  left_join(esp_2yr, by = c("ethnicity_group", "period_2yr")) %>%
+  mutate(
+    `Crude IR` = glue("{round(crude_rate, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR`   = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(`2-Year Interval` = period_2yr, ethnicity_group, `Crude IR`, `ESP IR`)
+
+rendered_5yr <- crude_5yr_summary %>%
+  left_join(esp_5yr, by = c("ethnicity_group", "period_5yr")) %>%
+  mutate(
+    `Crude IR` = glue("{round(crude_rate, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR`   = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(`5-Year Interval` = period_5yr, ethnicity_group, `Crude IR`, `ESP IR`)
+
+rendered_10yr <- crude_10yr_summary %>%
+  left_join(esp_10yr, by = c("ethnicity_group", "period_10yr")) %>%
+  mutate(
+    `Crude IR` = glue("{round(crude_rate, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR`   = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(`10-Year Interval` = period_10yr, ethnicity_group, `Crude IR`, `ESP IR`)
+
+
+library(writexl)
+
+write_xlsx(
+  list(
+    "Crude 2yr" = crude_2yr_summary,
+    "Crude 5yr" = crude_5yr_summary,
+    "Crude 10yr" = crude_10yr_summary,
+
+    "ESP 2yr" = esp_2yr,
+    "ESP 5yr" = esp_5yr,
+    "ESP 10yr" = esp_10yr,
+
+    "Rendered 2yr" = rendered_2yr,
+    "Rendered 5yr" = rendered_5yr,
+    "Rendered 10yr" = rendered_10yr
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_incidence_ethnicity_4groups_summary_tables.xlsx"
+)
+
+# Plotting
+ethnicity_colors <- c(
+  "White" = "#54278f",          # Deep purple
+  "Black Caribbean" = "#6a51a3", # Medium purple
+  "Black African" = "#9e9ac8"    # Soft lavender-blue
+)
+
+# Ribbons
+library(ggplot2)
+
+ggplot(esp_5yr, aes(x = period_5yr, y = std_rate, group = ethnicity_group, color = ethnicity_group, fill = ethnicity_group)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  geom_ribbon(aes(ymin = lower_ci_esp, ymax = upper_ci_esp), alpha = 0.2, color = NA) +
+  scale_color_manual(values = c(
+    "White" = "#49006a",
+    "Black Caribbean" = "#7a0177",
+    "Black African" = "#ae017e"
+  )) +
+  scale_fill_manual(values = c(
+    "White" = "#49006a",
+    "Black Caribbean" = "#7a0177",
+    "Black African" = "#ae017e"
+  )) +
+  labs(
+    title = "ESP-standardised Stroke Incidence (1995–2024)",
+    subtitle = "5-Year Intervals by Ethnicity (with 95% CI ribbons)",
+    x = "Period",
+    y = "Incidence per 100,000",
+    color = "Ethnicity",
+    fill = "Ethnicity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+
