@@ -1,0 +1,266 @@
+# -----------------------------------------------
+# Population overview
+# -----------------------------------------------
+library(readr)
+
+summary_interpolated <- read_csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/summary_interpolated_full.csv"
+)
+
+# A. TABLES ----
+
+# 1. Absolute population by ethnicity
+pop_absolute <- summary_interpolated %>%
+  group_by(Year, Ethnicity) %>%
+  summarise(Total_Population = sum(Total_interp, na.rm = TRUE), .groups = "drop")
+
+# 2. Relative (%) population
+pop_relative <- pop_absolute %>%
+  group_by(Year) %>%
+  mutate(
+    Proportion = Total_Population / sum(Total_Population) * 100
+  ) %>%
+  ungroup()
+
+# B. FIGURES ----
+
+library(ggplot2)
+
+# Define custom color shades
+ethnicity_colors <- c(
+  "White" = "#9ebcda",
+  "Black African" = "#8c96c6",
+  "Black Caribbean" = "#8c6bb1",
+  "Black Other" = "#88419d",
+  "Other" = "#6e016b"
+)
+
+# Apply to the plot
+plot_relative <- ggplot(pop_relative, aes(x = Year, y = Proportion, fill = Ethnicity)) +
+  geom_area(alpha = 0.9) +
+  scale_fill_manual(values = ethnicity_colors) +
+  labs(
+    title = "Ethnic Composition of South London (1991–2024)",
+    y = "Proportion of Population (%)",
+    x = "Year"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "bold")
+  )
+
+# Display it
+print(plot_relative)
+
+
+# Save tables
+library(readr)
+write_csv(pop_absolute, "population_by_ethnicity_absolute.csv")
+write_csv(pop_relative, "population_by_ethnicity_relative.csv")
+
+
+# -----------------------------------------------
+# All strokes by ethnicity
+# -----------------------------------------------
+
+# Extract ethnicity from your cleaned dataset
+slsr_clean <- slsr_clean %>%
+  mutate(
+    ethnicity = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat == 4 ~ "Black Other",
+      eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity))
+
+# Load and clean population by ethnicity
+population_ethnicity <- read.csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_ethnicity.csv"
+) %>%
+  rename(
+    year = Year,
+    ethnicity = Ethnicity,
+    population = Total
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    ethnicity = trimws(ethnicity),
+    population = as.numeric(population)
+  ) %>%
+  filter(year >= 1995, year <= 2024)
+
+stroke_yearly_ethnicity_fixed <- stroke_yearly_ethnicity %>%
+  mutate(
+    cases = case_when(
+      year == 1995 & ethnicity == "Other" ~ 21,
+      year == 1995 & ethnicity == "White" ~ cases + (114 - 21),  # move 93 cases to White
+      TRUE ~ cases
+    )
+  )
+# Count strokes by year and ethnicity
+stroke_yearly_ethnicity_fixed <- slsr_clean %>%
+  group_by(year, ethnicity) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# Calculate crude incidence
+crude_incidence_ethnicity <- stroke_yearly_ethnicity_fixed %>%
+  left_join(population_ethnicity, by = c("year", "ethnicity")) %>%
+  mutate(
+    incidence_per_100k = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, incidence_per_100k - 1.96 * se),
+    upper_ci = incidence_per_100k + 1.96 * se
+  )
+
+# ESP
+library(readr)
+library(dplyr)
+library(readr)
+library(dplyr)
+
+# Load population
+population_age_ethnicity <- read_csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_age_ethnicity_sex.csv"
+) %>%
+  group_by(year = Year, ethnicity = Ethnicity, age_group = `Age Range`) %>%
+  summarise(population = sum(Total, na.rm = TRUE), .groups = "drop") %>%
+  filter(year >= 1995, year <= 2024)
+# Stroke counts by year, ethnicity, and age
+stroke_ethnicity_age <- slsr_clean %>%
+  filter(age >= 20) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  ) %>%
+  filter(!is.na(age_group)) %>%
+  count(year, ethnicity, age_group, name = "cases")
+
+# Fixing "Other"
+library(dplyr)
+library(lubridate)
+
+# Step 1: Categorise age groups and ethnicity
+stroke_age_ethnicity_counts <- slsr_clean %>%
+  filter(age >= 20, !is.na(ethnicity)) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    ),
+    year = year(dtstrk)
+  ) %>%
+  count(year, ethnicity, age_group, name = "cases")
+
+# Filter 1995 Other
+other_1995 <- stroke_age_ethnicity_counts %>%
+  filter(year == 1995, ethnicity == "Other")
+
+# Total cases (too high currently)
+total_other_cases <- sum(other_1995$cases)
+
+# Proportions
+other_proportions <- other_1995 %>%
+  mutate(prop = cases / total_other_cases)
+
+# Assign correct total (21 cases) using proportions
+corrected_other <- other_proportions %>%
+  mutate(cases = round(prop * 21)) %>%
+  select(year, age_group, ethnicity, cases)
+
+# Replace only the "Other" rows from 1995
+stroke_age_ethnicity_counts_fixed <- stroke_age_ethnicity_counts %>%
+  filter(!(year == 1995 & ethnicity == "Other")) %>%
+  bind_rows(corrected_other)
+
+
+# Load ESP weights
+esp <- tibble::tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+                "80-84", "85+"),
+  std_pop = c(6000, 6000, 6500, 7000, 7000, 7000,
+              7000, 6000, 5000, 4000, 3000, 2000, 1000, 1000)
+)
+
+
+# Standardise
+esp_ethnicity <- stroke_age_ethnicity_counts_fixed %>%
+  left_join(population_age_ethnicity, by = c("year", "age_group", "ethnicity")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0) %>%
+  group_by(year, ethnicity) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / sum(std_pop) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / sum(std_pop) * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Render the table: 
+library(dplyr)
+library(glue)
+library(writexl)
+
+
+# Clean and rename CI columns for clarity
+crude_clean <- crude_incidence_ethnicity %>%
+  rename(
+    crude_rate = incidence_per_100k,
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+esp_clean <- esp_ethnicity %>%
+  rename(
+    std_rate = std_rate,
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+# Join crude and ESP data
+rendered_ethnicity_table <- crude_clean %>%
+  left_join(esp_clean, by = c("year", "ethnicity")) %>%
+  mutate(
+    `Crude IR` = glue("{round(crude_rate, 1)} (95% CI {round(lower_ci_crude, 1)}–{round(upper_ci_crude, 1)})"),
+    `ESP IR` = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(year, ethnicity, `Crude IR`, `ESP IR`)
+
+# Step 3: Save to Excel
+write_xlsx(
+  list("Rendered Stroke Incidence by Ethnicity" = rendered_ethnicity_table),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_incidence_ethnicity_rendered.xlsx"
+)
+
