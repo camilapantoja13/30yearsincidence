@@ -1692,3 +1692,337 @@ ggplot(sah_esp_5yr_filtered, aes(x = period_5yr, y = std_rate, group = ethnicity
     panel.grid.major = element_line(color = "grey85", linewidth = 0.3),
     panel.grid.minor = element_line(color = "grey92", linewidth = 0.2)
   )
+
+# ESOC tables
+library(dplyr)
+
+# Define ESP weights
+esp <- tibble::tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+                "80-84", "85+"),
+  std_pop = c(6000, 6000, 6500, 7000, 7000, 7000,
+              7000, 6000, 5000, 4000, 3000, 2000, 1000, 1000)
+)
+esp_total <- sum(esp$std_pop)
+
+# Filter ischaemic strokes and assign age_group
+slsr_ischaemic <- slsr_clean %>%
+  filter(subtype %in% 1:5, age >= 20, !is.na(ethnicity), !is.na(sex)) %>%
+  mutate(
+    year = lubridate::year(dtstrk),
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  )
+
+# Count strokes by year, ethnicity, sex, age_group
+ischaemic_counts_stratified <- slsr_ischaemic %>%
+  count(year, ethnicity, sex, age_group, name = "cases")
+
+library(readr)
+library(dplyr)
+
+# Load the CSV
+summary_interpolated <- read_csv("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/summary_interpolated_full.csv")
+
+# Clean and prepare the population data
+population_by_age_ethnicity_sex <- summary_interpolated %>%
+  rename(
+    year = Year,
+    sex = Sex,
+    ethnicity = Ethnicity,
+    age_group = `Age Range`,
+    population = Total_interp
+  ) %>%
+  # Keep only ESP-compatible age groups
+  filter(age_group %in% c("20-24", "25-29", "30-34", "35-39", "40-44", 
+                          "45-49", "50-54", "55-59", "60-64", "65-69", 
+                          "70-74", "75-79", "80-84", "85")) %>%
+  mutate(age_group = ifelse(age_group == "85", "85+", age_group))
+
+# Step 1: Categorise age group and include sex
+stroke_age_ethnicity_sex <- slsr_clean %>%
+  filter(age >= 20, !is.na(ethnicity), !is.na(sex)) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    ),
+    year = lubridate::year(dtstrk)
+  ) %>%
+  count(year, ethnicity, sex, age_group, name = "cases")
+
+stroke_age_ethnicity_sex <- stroke_age_ethnicity_sex %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Join with population by age/ethnicity/sex and ESP weights
+esp_by_sex <- stroke_age_ethnicity_sex %>%
+  mutate(sex = as.character(sex)) %>%
+  left_join(population_by_age_ethnicity_sex, 
+            by = c("year", "age_group", "ethnicity", "sex")) %>%
+  rename(population = population) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), population > 0) %>%
+  group_by(year, ethnicity, sex, age_group) %>%
+  summarise(
+    std_rate = (sum((cases / population) * std_pop) / esp_total) * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / esp_total * 100000,
+    lower_ci_esp = pmax(0, std_rate - 1.96 * se),
+    upper_ci_esp = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+library(dplyr)
+library(glue)
+library(tidyr)
+
+# Step 1: Format ESP values with CIs
+esp_formatted <- esp_by_sex %>%
+  mutate(
+    sex = ifelse(sex == 1, "Male", "Female"),
+    value = glue("{round(std_rate, 1)} (95% CI {round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})")
+  ) %>%
+  select(year, ethnicity, sex, age_group, value)
+
+# Optional: filter specific year if needed
+# esp_formatted <- esp_formatted %>% filter(year == 2020)
+
+# Step 2: Pivot wider to render table with both sexes side-by-side
+esp_rendered_table <- esp_formatted %>%
+  unite("ethnicity_sex", ethnicity, sex, sep = " (") %>%
+  mutate(ethnicity_sex = paste0(ethnicity_sex, ")")) %>%
+  pivot_wider(
+    names_from = ethnicity_sex,
+    values_from = value
+  ) %>%
+  arrange(factor(age_group, levels = c(
+    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+    "80-84", "85+"
+  )))
+
+# View table
+print(esp_rendered_table)
+
+# == Plotting ==
+library(dplyr)
+
+esp_total <- sum(esp$std_pop)  # Make sure your `esp` table is loaded
+
+# Create age-sex-ethnicity-level incidence with ESP standardisation
+esp_by_sex_age <- stroke_age_ethnicity_sex %>%
+  left_join(population_by_age_ethnicity_sex, 
+            by = c("year" = "year", "age_group" = "age_group", 
+                   "ethnicity" = "ethnicity", "sex" = "sex")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), population > 0) %>%
+  group_by(year, ethnicity, sex, age_group) %>%
+  summarise(
+    std_rate = (sum(cases) / sum(population)) * std_pop / esp_total * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / esp_total * 100000,
+    lower_ci_esp = pmax(0, std_rate - 1.96 * se),
+    upper_ci_esp = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+library(ggplot2)
+library(dplyr)
+
+# Clean data
+esp_plot_data <- esp_by_sex_age %>%
+  filter(ethnicity != "Black Other") %>%
+  mutate(sex = factor(sex, levels = c("Male", "Female")),
+         age_group = factor(age_group, levels = esp$age_group))
+
+# Faceted bar plot
+ggplot(esp_plot_data, aes(x = age_group, y = std_rate, fill = sex)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.8) +
+  facet_wrap(~ ethnicity) +
+  scale_fill_manual(values = c("Male" = "#377eb8", "Female" = "#e41a1c")) +
+  labs(
+    title = "ESP-Standardised Ischaemic Stroke Incidence by Age, Sex, and Ethnicity",
+    subtitle = "Incidence per 100,000 population",
+    x = "Age Group",
+    y = "ESP Incidence",
+    fill = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+library(tidyr)
+
+# Prepare heatmap-style format
+heatmap_data <- esp_plot_data %>%
+  unite("group", ethnicity, sex, sep = "_") %>%
+  select(age_group, group, std_rate) %>%
+  pivot_wider(names_from = group, values_from = std_rate)
+
+# Convert to matrix for heatmap if needed:
+# heatmap_matrix <- as.matrix(heatmap_data[,-1])
+# rownames(heatmap_matrix) <- heatmap_data$age_group
+# heatmap(heatmap_matrix, Colv = NA, Rowv = NA, scale = "none")
+
+# Or use ggplot-based heatmap
+heatmap_plot_data <- esp_plot_data %>%
+  mutate(group = paste(ethnicity, sex, sep = "\n"))
+
+ggplot(heatmap_plot_data, aes(x = group, y = age_group, fill = std_rate)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "#f7fbff", high = "#08306b", na.value = "grey90") +
+  labs(
+    title = "Heatmap of ESP-Standardised Stroke Incidence",
+    subtitle = "By Age Group, Ethnicity, and Sex",
+    x = "",
+    y = "Age Group",
+    fill = "ESP Rate"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# == Bars without the other ==
+library(dplyr)
+library(ggplot2)
+
+# Recalculate esp_plot_data excluding "Other"
+esp_plot_data <- esp_by_sex_age %>%
+  filter(!ethnicity %in% c("Black Other", "Other")) %>%  # exclude 'Other' group
+  mutate(
+    sex = factor(sex, levels = c("Male", "Female")),
+    age_group = factor(age_group, levels = esp$age_group)
+  )
+
+library(ggplot2)
+library(dplyr)
+
+# Re-filter and reformat data
+esp_plot_data <- esp_by_sex_age %>%
+  filter(!ethnicity %in% c("Black Other", "Other")) %>%
+  mutate(
+    sex = factor(sex, levels = c("Male", "Female")),
+    age_group = factor(age_group, levels = esp$age_group)
+  )
+
+# New purple palette
+purple_palette <- c("Male" = "#8073ac", "Female" = "#d8b5d6")
+
+# Updated plot
+ggplot(esp_plot_data, aes(x = age_group, y = std_rate, fill = sex)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), width = 0.7) +
+  facet_wrap(~ ethnicity, scales = "free_y") +
+  scale_fill_manual(values = purple_palette) +
+  labs(
+    title = "ESP-Standardised Ischaemic Stroke Incidence by Age, Sex, and Ethnicity",
+    subtitle = "Excluding 'Other' group — Incidence per 100,000 population",
+    x = "Age Group",
+    y = "ESP Incidence",
+    fill = "Sex"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, size = 9),
+    strip.text = element_text(face = "bold"),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+## Heatmap
+library(dplyr)
+library(ggplot2)
+
+# Prepare the data, excluding "Other" and "Black Other"
+heatmap_data <- esp_by_sex_age %>%
+  filter(!ethnicity %in% c("Other", "Black Other")) %>%
+  mutate(
+    group = paste(ethnicity, sex),
+    age_group = factor(age_group, levels = esp$age_group),
+    group = factor(group)
+  )
+
+# Heatmap plot
+# Clean the data to avoid duplicates
+heatmap_data_clean <- heatmap_data %>%
+  distinct(age_group, group, .keep_all = TRUE)
+
+# Plot with purple gradient
+library(ggplot2)
+library(dplyr)
+
+# Compute the midpoint of the gradient to decide text color threshold
+threshold <- 50  # Adjust this value to tune contrast behavior
+
+# Add a text color column based on fill intensity
+heatmap_data_clean <- heatmap_data_clean %>%
+  mutate(text_color = ifelse(std_rate > threshold, "white", "black"))
+
+# Plot
+library(dplyr)
+library(ggplot2)
+library(glue)
+
+# Step 1: Format label and determine text color
+heatmap_data_labelled <- heatmap_data_clean %>%
+  mutate(
+    label = glue("{round(std_rate, 1)} ({round(lower_ci_esp, 1)}–{round(upper_ci_esp, 1)})"),
+    text_color = ifelse(std_rate > 50, "white", "black")  # adjust threshold if needed
+  )
+
+# Step 2: Plot with CIs in labels
+ggplot(heatmap_data_labelled, aes(x = group, y = age_group, fill = std_rate)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = label, color = text_color), size = 2.5, show.legend = FALSE) +
+  scale_color_identity() +
+  scale_fill_gradient(
+    name = "ESP Rate",
+    low = "#f2e5f7", high = "#49006a", na.value = "grey90"
+  ) +
+  labs(
+    title = "Heatmap of ESP-Standardised Ischaemic Stroke Incidence",
+    subtitle = "By Age Group, Ethnicity, and Sex — Point estimate with 95% CI per 100,000",
+    x = NULL,
+    y = "Age Group"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+  )
+
+
+
+
+
+
