@@ -2021,6 +2021,66 @@ ggplot(heatmap_data_labelled, aes(x = group, y = age_group, fill = std_rate)) +
 
   )
 
+## Heatmap summarised 30 years
+
+esp_summary_all_years <- esp_plot_data %>%
+  group_by(ethnicity, sex, age_group) %>%
+  summarise(
+    std_rate = mean(std_rate, na.rm = TRUE),
+    lower_ci = mean(lower_ci_esp, na.rm = TRUE),
+    upper_ci = mean(upper_ci_esp, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    label = glue::glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})"),
+    group = paste(ethnicity, sex)
+  )
+
+library(dplyr)
+library(ggplot2)
+library(glue)
+
+# Step 1: Format label and determine text color using your summary dataset
+heatmap_data_labelled <- espischaemic_summary_all_years %>%
+  mutate(
+    label = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})"),
+    text_color = ifelse(std_rate > 50, "white", "black")  # or adjust threshold if needed
+  )
+
+# Step 2: Plot
+library(dplyr)
+library(ggplot2)
+library(glue)
+
+# Step 1: Format label and determine text color dynamically
+heatmap_data_labelled <- espischaemic_summary_all_years %>%
+  mutate(
+    label = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})"),
+    text_color = ifelse(std_rate > 25, "white", "black")  # threshold can be adjusted
+  )
+
+# Step 2: Plot with conditional text color
+ggplot(heatmap_data_labelled, aes(x = group, y = age_group, fill = std_rate)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = label), color = heatmap_data_labelled$text_color, size = 2.5) +
+  scale_fill_gradient(
+    name = "ESP Rate",
+    low = "#f2e5f7", high = "#49006a", na.value = "grey90"
+  ) +
+  labs(
+    title = "Heatmap of ESP-Standardised Ischaemic Stroke Incidence",
+    subtitle = "By Age Group, Ethnicity, and Sex — Point estimate with 95% CI per 100,000",
+    x = NULL,
+    y = "Age Group"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+
 
 
 
