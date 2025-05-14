@@ -59,6 +59,36 @@ library(readr)
 write_csv(pop_absolute, "population_by_ethnicity_absolute.csv")
 write_csv(pop_relative, "population_by_ethnicity_relative.csv")
 
+# == Linear plot === 
+
+library(ggplot2)
+library(dplyr)
+
+# Make sure your 'Year' column is treated as a numeric or integer for line plots
+pop_relative$Year <- as.integer(pop_relative$Year)
+
+# Filter to include only years 1995 to 2024
+pop_relative_filtered <- pop_relative %>%
+  filter(Year >= 1995, Year <= 2024)
+
+# Plot the relative population proportions over time by Ethnicity
+ggplot(pop_relative_filtered, aes(x = Year, y = Proportion, color = Ethnicity)) +
+  geom_line(size = 1.2) +
+  scale_color_manual(values = c("#49006a", "#9b59b6", "#e84393", "#fd79a8", "#d63031", "#fab1a0", "#6c5ce7")) +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  labs(
+    title = "Proportional Representation of Ethnicities in South London (1995–2024)",
+    x = "Year",
+    y = "Population Proportion (%)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 10, face = "bold"),  # 👈 Adjust title size here
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
 
 # -----------------------------------------------
 # All strokes by ethnicity
