@@ -124,6 +124,12 @@ population_ethnicity <- read.csv(
   ) %>%
   filter(year >= 1995, year <= 2024)
 
+
+# Count strokes by year and ethnicity
+stroke_yearly_ethnicity_fixed <- slsr_clean %>%
+  group_by(year, ethnicity) %>%
+  summarise(cases = n(), .groups = "drop")
+
 stroke_yearly_ethnicity_fixed <- stroke_yearly_ethnicity %>%
   mutate(
     cases = case_when(
@@ -132,10 +138,6 @@ stroke_yearly_ethnicity_fixed <- stroke_yearly_ethnicity %>%
       TRUE ~ cases
     )
   )
-# Count strokes by year and ethnicity
-stroke_yearly_ethnicity_fixed <- slsr_clean %>%
-  group_by(year, ethnicity) %>%
-  summarise(cases = n(), .groups = "drop")
 
 # Calculate crude incidence
 crude_incidence_ethnicity <- stroke_yearly_ethnicity_fixed %>%
@@ -160,6 +162,7 @@ population_age_ethnicity <- read_csv(
   group_by(year = Year, ethnicity = Ethnicity, age_group = `Age Range`) %>%
   summarise(population = sum(Total, na.rm = TRUE), .groups = "drop") %>%
   filter(year >= 1995, year <= 2024)
+
 # Stroke counts by year, ethnicity, and age
 stroke_ethnicity_age <- slsr_clean %>%
   filter(age >= 20) %>%
