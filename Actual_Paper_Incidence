@@ -1,0 +1,511 @@
+# Loading the dataset and everything
+install.packages("readxl")
+library(readxl)
+dataset_20250422 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/20250422 dataset.xlsx")
+library(dplyr)      # For %>%
+library(gt)         # For rendering the tables
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+install.packages("writexl")  
+library(writexl)
+
+# View first few rows
+head(dataset_20250422)
+
+# Then, set working directory for outputs
+setwd("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R")
+
+# Load correct population total
+population_totals <- read.csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_total.csv"
+) %>%
+  mutate(
+    year = as.integer(Year),
+    population = as.numeric(Total_Population)
+  ) %>%
+  filter(!is.na(year) & year < 2025) %>%
+  select(year, population)
+
+# Load age-specific population for ESP
+population_age_year <- read.csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_age.csv"
+) %>%
+  rename(
+    year = Year,
+    age_group = Age.Range,
+    population = Total
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    population = as.numeric(population),
+    age_group = gsub(" - ", "-", age_group)
+  ) %>%
+  filter(!is.na(year) & year < 2025)
+
+# Ward codes (Just for me to read)
+southwark95 <- c(
+  "Cathedral", "Chaucer", "Bricklayers", "Riverside", 
+  "Rotherhithe", Dockyard", "Browning", "Burgees", 
+  "Newington", "Faraday", 
+  "St Giles", Brunswick", 
+)
+southwark01 <- c(
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
+  "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
+  "Faraday", "Camberwell Green"
+)
+southwark11 <- c(
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
+  "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
+  "Faraday", "Camberwell Green"
+)
+southwark21 <- c(
+  "Borough & Bankside", "Camberwell Green", "Chaucer", "Faraday",
+  "London Bridge & West Bermondsey", "Newington (Southwark)", "North Bermondsey",
+  "North Walworth", "Old Kent Road", "Rotherhithe",
+  "South Bermondsey", "St George's (Southwark)", "Surrey Docks"
+)
+lambeth95 <- c("Bishop's", "Town Hall", "Streatham Hill", "Clapham Park", "Clapham Town", "Angell", "Herne Hill", "Ferndale",
+               "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall")
+lambeth01 <- c(
+  "Bishop`s", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
+  "Herne Hill", "Larkhall", "Oval", "Prince`s", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
+)
+lambeth11 <- c(
+  "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
+  "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
+)
+lambeth21 <- c(
+  "Waterloo & South Bank", "Vauxhall (Lambeth)", "Kennington (Lambeth)", "Oval",
+  "Stockwell West & Larkhall", "Stockwell East", "Myatt's Fields", "Clapham Town",
+  "Clapham East", "Clapham Common & Abbeville", "Brixton Acre Lane", "Brixton North",
+  "Brixton Rush Common", "Clapham Park", "Brixton Windrush",
+  "Herne Hill & Loughborough Junction", "St Martin's (Lambeth)"
+)
+
+# Valid LSOAs  (Just for me to read)
+valid_lsoas_southwark <- c(
+  # Cathedrals
+  "E01003927", "E01003929", "E01003934", "E01003935", "E01003928",
+  "E01003930", "E01003931", "E01003932", "E01003933",
+
+  # Chaucer
+  "E01003939", "E01003938", "E01003940", "E01003941", "E01003942",
+  "E01003936", "E01003937", "E01003943", "E01003944",
+
+  # Grange
+  "E01003976", "E01003982", "E01003975", "E01003978", "E01003979",
+  "E01003981", "E01003977", "E01003980",
+
+  # Riverside
+  "E01004025", "E01004026", "E01004027", "E01004022", "E01004023",
+  "E01004028", "E01004024",
+
+  # Rotherhithe
+  "E01004029", "E01004032", "E01004030", "E01004031", "E01004033",
+  "E01004034", "E01004036", "E01004035",
+
+  # Surrey Docks
+  "E01004053", "E01004054", "E01004055", "E01004056", "E01004057",
+  "E01004058", "E01004059", "E01004060",
+
+  # Newington
+  "E01003994", "E01003992", "E01003995", "E01003996", "E01003998",
+  "E01003999", "E01003991",
+
+  # East Walworth
+  "E01003959", "E01003960", "E01003961", "E01003962", "E01003965",
+  "E01003964", "E01003966", "E01003963",
+
+  # South Bermondsey
+  "E01004037", "E01004038", "E01004042", "E01004043", "E01004039",
+  "E01004040", "E01004041", "E01004044",
+
+  # Faraday
+  "E01003968", "E01003971", "E01003974", "E01003967", "E01003970",
+  "E01003972", "E01003973", "E01003969",
+
+  # Camberwell Green
+  "E01003923", "E01003918", "E01003925", "E01003919", "E01003920",
+  "E01003921", "E01003922", "E01003924", "E01003926"
+)
+
+valid_lsoas_lambeth <- c(
+  # Bishop's
+  "E01003012", "E01003013", "E01003014", "E01003016", "E01003017", "E01003015",
+
+  # Brixton Hill
+  "E01003019", "E01003020", "E01003018", "E01003021", "E01003022",
+  "E01003023", "E01003024", "E01003025",
+
+  # Clapham Common
+  "E01003029", "E01003032", "E01003026", "E01003027", "E01003028",
+  "E01003030", "E01003033", "E01003031",
+
+  # Clapham Town
+  "E01003034", "E01003035", "E01003036", "E01003037", "E01003038",
+  "E01003039", "E01003040", "E01003042", "E01003041",
+
+  # Coldharbour
+  "E01003046", "E01003048", "E01003045", "E01003047", "E01003049",
+  "E01003050", "E01003052", "E01003043", "E01003044", "E01003051",
+
+  # Ferndale
+  "E01003059", "E01003060", "E01003061", "E01003053", "E01003054",
+  "E01003056", "E01003058", "E01003055", "E01003057",
+
+  # Herne Hill
+  "E01003075", "E01003072", "E01003073", "E01003076", "E01003077",
+  "E01003078", "E01003071", "E01003074",
+
+  # Larkhall
+  "E01003089", "E01003091", "E01003092", "E01003088", "E01003093",
+  "E01003094", "E01003096", "E01003090", "E01003095",
+
+  # Oval
+  "E01003101", "E01003102", "E01003103", "E01003104", "E01003098",
+  "E01003099", "E01003100", "E01003097",
+
+  # Prince's
+  "E01003108", "E01003110", "E01003111", "E01003112", "E01003105",
+  "E01003106", "E01003107", "E01003109",
+
+  # Stockwell
+  "E01003122", "E01003129", "E01003121", "E01003123", "E01003124",
+  "E01003125", "E01003126", "E01003128", "E01003127",
+
+  # Thornton
+  "E01003159", "E01003160", "E01003162", "E01003156", "E01003157",
+  "E01003158", "E01003161", "E01003163",
+
+  # Tulse Hill
+  "E01003176", "E01003171", "E01003173", "E01003177", "E01003178",
+  "E01003172", "E01003174", "E01003175", "E01003179",
+
+  # Vassall
+  "E01003180", "E01003183", "E01003181", "E01003184", "E01003185",
+  "E01003186", "E01003187", "E01003182", "E01003188"
+)
+
+# Actual code to put in R for creating the filter
+valid_lsoas <- c(
+  "E01003927", "E01003929", "E01003934", "E01003935", "E01003928", "E01003930", "E01003931", "E01003932", "E01003933",
+  "E01003939", "E01003938", "E01003940", "E01003941", "E01003942", "E01003936", "E01003937", "E01003943", "E01003944",
+  "E01003976", "E01003982", "E01003975", "E01003978", "E01003979", "E01003981", "E01003977", "E01003980",
+  "E01004025", "E01004026", "E01004027", "E01004022", "E01004023", "E01004028", "E01004024",
+  "E01004029", "E01004032", "E01004030", "E01004031", "E01004033", "E01004034", "E01004036", "E01004035",
+  "E01004053", "E01004054", "E01004055", "E01004056", "E01004057", "E01004058", "E01004059", "E01004060",
+  "E01003994", "E01003992", "E01003995", "E01003996", "E01003998", "E01003999", "E01003991",
+  "E01003959", "E01003960", "E01003961", "E01003962", "E01003965", "E01003964", "E01003966", "E01003963",
+  "E01004037", "E01004038", "E01004042", "E01004043", "E01004039", "E01004040", "E01004041", "E01004044",
+  "E01003968", "E01003971", "E01003974", "E01003967", "E01003970", "E01003972", "E01003973", "E01003969",
+  "E01003923", "E01003918", "E01003925", "E01003919", "E01003920", "E01003921", "E01003922", "E01003924", "E01003926",
+  "E01003012", "E01003013", "E01003014", "E01003016", "E01003017", "E01003015",
+  "E01003019", "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+  "E01003029", "E01003032", "E01003026", "E01003027", "E01003028", "E01003030", "E01003033", "E01003031",
+  "E01003034", "E01003035", "E01003036", "E01003037", "E01003038", "E01003039", "E01003040", "E01003042", "E01003041",
+  "E01003046", "E01003048", "E01003045", "E01003047", "E01003049", "E01003050", "E01003052", "E01003043", "E01003044", "E01003051",
+  "E01003059", "E01003060", "E01003061", "E01003053", "E01003054", "E01003056", "E01003058", "E01003055", "E01003057",
+  "E01003075", "E01003072", "E01003073", "E01003076", "E01003077", "E01003078", "E01003071", "E01003074",
+  "E01003089", "E01003091", "E01003092", "E01003088", "E01003093", "E01003094", "E01003096", "E01003090", "E01003095",
+  "E01003101", "E01003102", "E01003103", "E01003104", "E01003098", "E01003099", "E01003100", "E01003097",
+  "E01003108", "E01003110", "E01003111", "E01003112", "E01003105", "E01003106", "E01003107", "E01003109",
+  "E01003122", "E01003129", "E01003121", "E01003123", "E01003124", "E01003125", "E01003126", "E01003128", "E01003127",
+  "E01003159", "E01003160", "E01003162", "E01003156", "E01003157", "E01003158", "E01003161", "E01003163",
+  "E01003176", "E01003171", "E01003173", "E01003177", "E01003178", "E01003172", "E01003174", "E01003175", "E01003179",
+  "E01003180", "E01003183", "E01003181", "E01003184", "E01003185", "E01003186", "E01003187", "E01003182", "E01003188"
+)
+
+# Filter dataset excluding <20y and unplausible years like >200 and exclusing if date is within STOP STROKE period *and* not in a valid LSOA 
+slsr_clean <- dataset_20250422 %>%
+  filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
+  mutate(
+    dtstrk = as.Date(paste(strk_y, strk_m, strk_d, sep = "-"), format = "%Y-%m-%d"),
+    year = year(dtstrk)
+  ) %>%
+  filter(
+    !is.na(sex),
+    !is.na(age),
+    age >= 20 & age <= 200,  
+    !(dtstrk >= as.Date("2004-11-15") & dtstrk <= as.Date("2007-12-31") &
+      !(lsoa11 %in% valid_lsoas))
+  )
+
+#--------------------------------------------------
+# All Stroke totals crude and ESP incidence
+#--------------------------------------------------
+
+# === Strokes per year ====
+# Add stroke year to the cleaned dataset
+slsr_clean <- slsr_clean %>%
+  mutate(year = lubridate::year(dtstrk))
+
+# Count strokes per year
+stroke_yearly <- slsr_clean %>%
+  group_by(year) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# View the result
+print(stroke_yearly)
+
+# Save it
+library(writexl)
+write_xlsx(stroke_yearly, "stroke_yearly.xlsx")
+
+# === Crude incidence ====
+crude_incidence <- stroke_yearly %>%
+  left_join(population_totals, by = "year") %>%
+  mutate(
+    incidence_per_100k = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, incidence_per_100k - 1.96 * se),  # no negative CI
+    upper_ci = incidence_per_100k + 1.96 * se
+  )
+# Save it
+write_xlsx(crude_incidence, "allstrokescrudeyearly.xlsx")
+
+# === ESP incidence calculation ===
+# Prepare stroke data with age groups
+slsr_clean <- slsr_clean %>%
+  mutate(
+    year = lubridate::year(dtstrk),
+    age_group = case_when(
+      age >= 18 & age < 20 ~ "18-19",
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+",
+      TRUE ~ NA_character_
+    )
+  )
+
+age_specific_incidence <- slsr_clean %>%
+  filter(!is.na(age_group)) %>%
+  count(year, age_group, name = "cases")
+
+# Define ESP weights
+esp <- tibble::tibble(
+  age_group = c(
+    "18-19", "20-24", "25-29", "30-34", "35-39",
+    "40-44", "45-49", "50-54", "55-59", "60-64",
+    "65-69", "70-74", "75-79", "80-84", "85+"
+  ),
+  std_pop = c(
+    5500, 10500, 10000, 9500, 9500,
+    9000, 8000, 7000, 6000, 5000,
+    4000, 3000, 2000, 1000, 1000
+  )
+)
+
+esp_total <- sum(esp$std_pop)
+# Merge stroke + population + ESP
+standardised_data <- age_specific_incidence %>%
+  left_join(population_age_year, by = c("year", "age_group")) %>%
+  left_join(esp, by = "age_group")
+
+european_std_incidence <- standardised_data %>%
+  filter(
+    !is.na(cases), !is.na(population), population > 0
+  ) %>%
+  group_by(year) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / esp_total * 100000,
+    se = sqrt(sum(((std_pop / esp_total)^2) * (cases / (population^2)))) * 100000,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower_ci = pmax(0, std_rate - 1.96 * se),  # No negative lower CIs
+    upper_ci = std_rate + 1.96 * se
+  )
+
+# Save it
+write_xlsx(european_std_incidence, "ESPallstrokescrudeyearly.xlsx")
+
+# == Comparison table ==
+crude_incidence_clean <- crude_incidence %>%
+  rename(
+    crude_rate = incidence_per_100k,
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+european_std_incidence_clean <- european_std_incidence %>%
+  rename(
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+comparison_table <- stroke_yearly %>%
+  left_join(crude_incidence_clean, by = "year") %>%
+  left_join(european_std_incidence_clean, by = "year") %>%
+  mutate(
+    `Crude IR (local)` = glue::glue("{round(crude_rate, 2)} (95% CI {round(lower_ci_crude, 2)}–{round(upper_ci_crude, 2)})"),
+    `Adjusted IR (Europe)` = glue::glue("{round(std_rate, 2)} (95% CI {round(lower_ci_esp, 2)}–{round(upper_ci_esp, 2)})")
+  ) %>%
+  select(year, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+# Save it
+write_xlsx(comparison_table, "renderedyearlyincidence.xlsx")
+
+library(dplyr)
+library(glue)
+
+# == 5 years crude and ESP == 
+
+# Add Year Groupings 
+crude_incidence <- crude_incidence %>%
+  mutate(
+    group_5yr = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    ),
+    group_10yr = case_when(
+      year %in% 1995:2004 ~ "1995–2004",
+      year %in% 2005:2014 ~ "2005–2014",
+      year %in% 2015:2024 ~ "2015–2024"
+    )
+  )
+
+european_std_incidence <- european_std_incidence %>%
+  mutate(
+    group_5yr = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    ),
+    group_10yr = case_when(
+      year %in% 1995:2004 ~ "1995–2004",
+      year %in% 2005:2014 ~ "2005–2014",
+      year %in% 2015:2024 ~ "2015–2024"
+    )
+  )
+
+#  Crude Aggregated Rates 
+crude_5yr <- crude_incidence %>%
+  filter(!is.na(group_5yr), !is.na(cases), !is.na(population)) %>%
+  group_by(group_5yr) %>%
+  summarise(
+    cases = sum(cases),
+    population = sum(population),
+    mean_incidence = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, mean_incidence - 1.96 * se),
+    upper_ci = mean_incidence + 1.96 * se,
+    .groups = "drop"
+  )
+
+#  ESP-Standardised Aggregated Rates 
+esp_5yr <- european_std_incidence %>%
+  filter(!is.na(group_5yr)) %>%
+  group_by(group_5yr) %>%
+  summarise(
+    mean_std_rate = mean(std_rate),
+    se = sqrt(sum(se^2)) / n(),
+    lower_ci = pmax(0, mean_std_rate - 1.96 * se),
+    upper_ci = mean_std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+
+#  Rendered Summary Tables 
+library(glue)
+
+rendered_5yr <- crude_5yr %>%
+  left_join(esp_5yr, by = "group_5yr") %>%
+  mutate(
+    `Crude IR (local)` = glue("{round(mean_incidence, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `Adjusted IR (Europe)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`5-year interval` = group_5yr, `Crude IR (local)`, `Adjusted IR (Europe)`)
+
+
+# Save
+write_xlsx(
+    list(
+        "5-year Crude" = crude_5yr,
+        "5-year ESP" = esp_5yr,
+        "5-year Rendered" = rendered_5yr
+    ),
+    path = "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/stroke_summary_5_10yr.xlsx"
+)
+
+# -----------------------------------------------
+# Plotting the yearly crude + standariswed with the 95% CI
+# -----------------------------------------------
+crude_incidence <- crude_incidence %>%
+  rename(
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+european_std_incidence <- european_std_incidence %>%
+  rename(
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+library(ggplot2)
+library(dplyr)
+
+# Combine and format plot data
+plot_data <- bind_rows(
+  crude_incidence %>%
+    select(year, incidence = incidence_per_100k, lower = lower_ci_crude, upper = upper_ci_crude) %>%
+    mutate(label = "Crude incidence"),
+  european_std_incidence %>%
+    select(year, incidence = std_rate, lower = lower_ci_esp, upper = upper_ci_esp) %>%
+    mutate(label = "ESP-standardised incidence")
+)
+
+# Filter to exclude 2025
+plot_data_filtered <- plot_data %>%
+  filter(year <= 2024)
+
+# Plot
+ggplot(plot_data_filtered, aes(x = year, y = incidence)) +
+  geom_point(aes(color = label), size = 1.8) +
+  geom_line(aes(color = label), size = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = label), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  scale_color_manual(values = c(
+    "Crude incidence" = "#1f78b4",
+    "ESP-standardised incidence" = "#33a02c"
+  )) +
+  labs(
+    title = "Annual Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Crude and ESP-standardised estimates with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Rate Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+#--------------------------------------------------
+# Creating Table 1 and Supplementary Table 1
+#--------------------------------------------------
+
