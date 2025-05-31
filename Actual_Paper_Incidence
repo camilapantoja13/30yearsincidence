@@ -509,3 +509,836 @@ ggplot(plot_data_filtered, aes(x = year, y = incidence)) +
 # Creating Table 1 and Supplementary Table 1
 #--------------------------------------------------
 
+# Identify stroke_type in ischaemic, PICH and SAH
+slsr_clean <- slsr_clean %>%
+  mutate(
+    stroke_type = case_when(
+      subtype %in% 1:5 ~ "Ischaemic",
+      subtype == 6 ~ "PICH",
+      subtype == 7 ~ "SAH",
+      
+      # Fallback using strksub if subtype is NA or unclear
+      is.na(subtype) & strksub == 1 ~ "Ischaemic",
+      is.na(subtype) & strksub == 2 ~ "PICH",
+      is.na(subtype) & strksub == 3 ~ "SAH",
+      
+      # If still not clear, label as unknown
+      TRUE ~ "Unknown"
+    )
+  )
+
+# == Crude incidence yearly ==
+# Count cases per year and stroke type
+slsr_clean <- slsr_clean %>%
+  mutate(
+    stroke_type = case_when(
+      # Primary: OCSP classification
+      subtype %in% 1:5 ~ "Ischaemic",
+      subtype == 6 ~ "PICH",
+      subtype == 7 ~ "SAH",
+
+      # Fallback 1: stroke subtype
+      is.na(subtype) & strksub == 1 ~ "Ischaemic",
+      is.na(subtype) & strksub == 2 ~ "PICH",
+      is.na(subtype) & strksub == 3 ~ "SAH",
+
+      # Fallback 2: infarct/haemorrhage
+      is.na(subtype) & is.na(strksub) & stroke == 1 ~ "Ischaemic",
+
+      # Still unknown
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Join with total population (same for all types)
+crude_incidence_subtype <- stroke_yearly_subtype %>%
+  left_join(population_totals, by = "year") %>%
+  mutate(
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se
+  )
+
+# == ESP incidence yearly == 
+
+# Count cases by year, age group, and stroke type
+age_specific_incidence_subtype <- slsr_clean %>%
+  filter(!is.na(age_group), !is.na(stroke_type)) %>%
+  count(year, age_group, stroke_type, name = "cases")
+
+# Merge with age-specific population and ESP
+standardised_data_subtype <- age_specific_incidence_subtype %>%
+  left_join(population_age_year, by = c("year", "age_group")) %>%
+  left_join(esp, by = "age_group")
+
+# Calculate ESP-standardised incidence per stroke type
+european_std_subtype <- standardised_data_subtype %>%
+  filter(!is.na(cases), !is.na(population), population > 0) %>%
+  group_by(year, stroke_type) %>%
+  summarise(
+    std_rate = sum((cases / population) * std_pop) / esp_total * 100000,
+    se = sqrt(sum(((std_pop / esp_total)^2) * (cases / (population^2)))) * 100000,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se
+  )
+
+# Save
+write_xlsx(
+    list(
+        "Annual Subtype" = crude_incidence_subtype,
+        "ESP subtype" = european_std_subtype
+    ),
+    path = "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/annualsubtype.xlsx"
+)
+
+# Rendering
+# Clean names for joining
+crude_subtypes_annual_clean <- crude_incidence_subtype %>%
+  rename(
+    lower_ci_crude = lower_ci,
+    upper_ci_crude = upper_ci
+  )
+
+esp_subtypes_annual_clean <- european_std_subtype %>%
+  rename(
+    lower_ci_esp = lower_ci,
+    upper_ci_esp = upper_ci
+  )
+
+# Join and render final comparison table
+rendered_subtype_annual <- crude_subtypes_annual_clean %>%
+  left_join(esp_subtypes_annual_clean, by = c("year", "stroke_type")) %>%
+  mutate(
+    `Crude IR (95% CI)` = glue::glue("{round(crude_rate, 2)} (95% CI {round(lower_ci_crude, 2)}–{round(upper_ci_crude, 2)})"),
+    `ESP IR (95% CI)` = glue::glue("{round(std_rate, 2)} (95% CI {round(lower_ci_esp, 2)}–{round(upper_ci_esp, 2)})")
+  ) %>%
+  select(year, stroke_type, `Crude IR (95% CI)`, `ESP IR (95% CI)`)
+
+# = Rendering Supplementary Table 1 == 
+# First, label the overall rates with stroke_type = "All strokes"
+all_strokes_annual <- crude_incidence_clean %>%
+  left_join(european_std_incidence_clean, by = "year") %>%
+  mutate(
+    stroke_type = "All strokes",
+    `Crude IR (95% CI)` = glue::glue("{round(crude_rate, 2)} (95% CI {round(lower_ci_crude, 2)}–{round(upper_ci_crude, 2)})"),
+    `ESP IR (95% CI)` = glue::glue("{round(std_rate, 2)} (95% CI {round(lower_ci_esp, 2)}–{round(upper_ci_esp, 2)})")
+  ) %>%
+  select(year, stroke_type, `Crude IR (95% CI)`, `ESP IR (95% CI)`)
+
+# Now, combine with the rendered subtype-specific table
+rendered_subtype_annual_final <- bind_rows(
+  all_strokes_annual,
+  rendered_subtype_annual
+) %>%
+  filter(stroke_type != "Unknown") %>%
+  arrange(year, stroke_type)  # Optional: clean sorting
+
+library(gt)
+
+rendered_subtype_annual_final %>%
+  gt() %>%
+  tab_header(
+    title = "Annual Crude and ESP-Standardised Incidence by Stroke Type",
+    subtitle = "Rates per 100,000 with 95% Confidence Intervals"
+  ) %>%
+  cols_label(
+    year = "Year",
+    stroke_type = "Stroke Type",
+    `Crude IR (95% CI)` = "Crude IR (95% CI)",
+    `ESP IR (95% CI)` = "ESP IR (95% CI)"
+  ) %>%
+  tab_options(
+    table.font.size = 13,
+    heading.align = "left"
+  )
+
+# == Table 1 ==
+# Add 5-year groupings to the cleaned dataset
+slsr_clean <- slsr_clean %>%
+  mutate(
+    group_5yr = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    )
+  )
+# Count cases by group_5yr and stroke_type
+crude_subtypes_5yr <- slsr_clean %>%
+  filter(!is.na(group_5yr), stroke_type != "Unknown") %>%
+  group_by(group_5yr, stroke_type) %>%
+  summarise(
+    cases = n(),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    population_totals %>%
+      mutate(group_5yr = case_when(
+        year %in% 1995:1999 ~ "1995–1999",
+        year %in% 2000:2004 ~ "2000–2004",
+        year %in% 2005:2009 ~ "2005–2009",
+        year %in% 2010:2014 ~ "2010–2014",
+        year %in% 2015:2019 ~ "2015–2019",
+        year %in% 2020:2024 ~ "2020–2024"
+      )) %>%
+      group_by(group_5yr) %>%
+      summarise(population = sum(population), .groups = "drop"),
+    by = "group_5yr"
+  ) %>%
+  mutate(
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se
+  )
+
+# Add group_5yr to the age-specific ESP-standardised data
+european_std_subtype_5yr <- european_std_subtype %>%
+  mutate(
+    group_5yr = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    )
+  ) %>%
+  filter(!is.na(group_5yr), stroke_type != "Unknown") %>%
+  group_by(group_5yr, stroke_type) %>%
+  summarise(
+    mean_std_rate = mean(std_rate),
+    se = sqrt(sum(se^2)) / n(),
+    lower_ci = pmax(0, mean_std_rate - 1.96 * se),
+    upper_ci = mean_std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Add group_5yr to the age-specific ESP-standardised data
+european_std_subtype_5yr <- european_std_subtype %>%
+  mutate(
+    group_5yr = case_when(
+      year %in% 1995:1999 ~ "1995–1999",
+      year %in% 2000:2004 ~ "2000–2004",
+      year %in% 2005:2009 ~ "2005–2009",
+      year %in% 2010:2014 ~ "2010–2014",
+      year %in% 2015:2019 ~ "2015–2019",
+      year %in% 2020:2024 ~ "2020–2024"
+    )
+  ) %>%
+  filter(!is.na(group_5yr), stroke_type != "Unknown") %>%
+  group_by(group_5yr, stroke_type) %>%
+  summarise(
+    mean_std_rate = mean(std_rate),
+    se = sqrt(sum(se^2)) / n(),
+    lower_ci = pmax(0, mean_std_rate - 1.96 * se),
+    upper_ci = mean_std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+library(glue)
+
+rendered_subtype_5yr <- crude_subtypes_5yr %>%
+  left_join(european_std_subtype_5yr, by = c("group_5yr", "stroke_type")) %>%
+  mutate(
+    `Crude IR (95% CI)` = glue("{round(crude_rate, 2)} (95% CI {round(lower_ci.x, 2)}–{round(upper_ci.x, 2)})"),
+    `ESP IR (95% CI)` = glue("{round(mean_std_rate, 2)} (95% CI {round(lower_ci.y, 2)}–{round(upper_ci.y, 2)})")
+  ) %>%
+  select(`5-year period` = group_5yr, stroke_type, `Crude IR (95% CI)`, `ESP IR (95% CI)`)
+
+# Save
+write_xlsx(rendered_subtype_5yr, "Table1_5yr_Subtype_Incidence.xlsx")
+write_xlsx(crude_subtypes_5yr, "crude_subtypes_5yr.xlsx") 
+write_xlsx(european_std_subtype_5yr, "european_std_subtype_5yr.xlsx")
+
+# == Rendering table 1 ==
+
+# Prepare all-stroke 5-year table to match structure
+rendered_all_5yr <- rendered_5yr %>%
+  mutate(
+    stroke_type = "All strokes",
+    `Crude IR (95% CI)` = `Crude IR (local)`,
+    `ESP IR (95% CI)` = `Adjusted IR (Europe)`
+  ) %>%
+  select(`5-year period` = `5-year interval`, stroke_type, `Crude IR (95% CI)`, `ESP IR (95% CI)`)
+rendered_combined_5yr <- bind_rows(
+  rendered_all_5yr,
+  rendered_subtype_5yr
+) %>%
+  arrange(`5-year period`, stroke_type)
+
+rendered_combined_5yr %>%
+  gt() %>%
+  tab_header(
+    title = "5-Year Incidence Rates by Stroke Type",
+    subtitle = "Crude and ESP-Standardised per 100,000 (95% CI)"
+  ) %>%
+  cols_label(
+    `5-year period` = "5-Year Interval",
+    stroke_type = "Stroke Type"
+  )
+
+#--------------------------------------------------
+# Supplementary Figure 1
+#--------------------------------------------------
+
+# == Ischaemic 
+library(dplyr)
+
+# Filter and prepare crude
+crude_ischaemic <- crude_subtypes_annual_clean %>%
+  filter(stroke_type == "Ischaemic") %>%
+  select(year, incidence = crude_rate, lower = lower_ci_crude, upper = upper_ci_crude) %>%
+  mutate(label = "Crude incidence")
+
+# Filter and prepare ESP
+esp_ischaemic <- esp_subtypes_annual_clean %>%
+  filter(stroke_type == "Ischaemic") %>%
+  select(year, incidence = std_rate, lower = lower_ci_esp, upper = upper_ci_esp) %>%
+  mutate(label = "ESP-standardised incidence")
+
+# Combine
+plot_data_ischaemic <- bind_rows(crude_ischaemic, esp_ischaemic) %>%
+  filter(year <= 2024)
+library(ggplot2)
+
+ggplot(plot_data_ischaemic, aes(x = year, y = incidence)) +
+  geom_point(aes(color = label), size = 1.8) +
+  geom_line(aes(color = label), size = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = label), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  scale_color_manual(values = c(
+    "Crude incidence" = "#1f78b4",
+    "ESP-standardised incidence" = "#33a02c"
+  )) +
+  labs(
+    title = "Annual Ischaemic Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Crude and ESP-standardised estimates with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Rate Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+# == PICH ==
+# Filter and prepare crude for PICH
+crude_pich <- crude_subtypes_annual_clean %>%
+  filter(stroke_type == "PICH") %>%
+  select(year, incidence = crude_rate, lower = lower_ci_crude, upper = upper_ci_crude) %>%
+  mutate(label = "Crude incidence")
+
+# Filter and prepare ESP for PICH
+esp_pich <- esp_subtypes_annual_clean %>%
+  filter(stroke_type == "PICH") %>%
+  select(year, incidence = std_rate, lower = lower_ci_esp, upper = upper_ci_esp) %>%
+  mutate(label = "ESP-standardised incidence")
+
+# Combine
+plot_data_pich <- bind_rows(crude_pich, esp_pich) %>%
+  filter(year <= 2024)
+ggplot(plot_data_pich, aes(x = year, y = incidence)) +
+  geom_point(aes(color = label), size = 1.8) +
+  geom_line(aes(color = label), size = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = label), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  scale_color_manual(values = c(
+    "Crude incidence" = "#1f78b4",
+    "ESP-standardised incidence" = "#33a02c"
+  )) +
+  labs(
+    title = "Annual PICH Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Crude and ESP-standardised estimates with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Rate Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+# == SAH ==
+# Filter and prepare crude for SAH
+crude_sah <- crude_subtypes_annual_clean %>%
+  filter(stroke_type == "SAH") %>%
+  select(year, incidence = crude_rate, lower = lower_ci_crude, upper = upper_ci_crude) %>%
+  mutate(label = "Crude incidence")
+
+# Filter and prepare ESP for SAH
+esp_sah <- esp_subtypes_annual_clean %>%
+  filter(stroke_type == "SAH") %>%
+  select(year, incidence = std_rate, lower = lower_ci_esp, upper = upper_ci_esp) %>%
+  mutate(label = "ESP-standardised incidence")
+
+# Combine
+plot_data_sah <- bind_rows(crude_sah, esp_sah) %>%
+  filter(year <= 2024)
+
+ggplot(plot_data_sah, aes(x = year, y = incidence)) +
+  geom_point(aes(color = label), size = 1.8) +
+  geom_line(aes(color = label), size = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, color = label), width = 0.4, size = 0.6) +
+  facet_wrap(~ label, ncol = 1, scales = "free_y") +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  scale_color_manual(values = c(
+    "Crude incidence" = "#1f78b4",
+    "ESP-standardised incidence" = "#33a02c"
+  )) +
+  labs(
+    title = "Annual SAH Stroke Incidence per 100,000 (1995–2024)",
+    subtitle = "Crude and ESP-standardised estimates with 95% Confidence Intervals",
+    x = "Year",
+    y = "Incidence Rate",
+    color = "Rate Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank()
+  )
+
+
+#--------------------------------------------------
+# Poisson Table 2
+#--------------------------------------------------
+library(dplyr)
+library(broom)
+
+# Relevel to make 1995–1999 the reference
+model_data <- crude_5yr %>%
+  filter(!is.na(group_5yr)) %>%
+  mutate(group_5yr = factor(group_5yr, levels = c(
+    "1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"
+  )))
+
+model_baseline <- glm(
+  cases ~ group_5yr,
+  offset = log(population),
+  data = model_data,
+  family = poisson()
+)
+
+results_baseline <- tidy(model_baseline, exponentiate = TRUE, conf.int = TRUE)
+
+# Create a new factor where each level is compared to the previous
+model_data <- model_data %>%
+  arrange(group_5yr) %>%
+  mutate(group_5yr_lag = lag(group_5yr)) %>%
+  filter(!is.na(group_5yr_lag))
+
+# Function to loop over group comparisons
+get_lagged_irr <- function(current_group, previous_group) {
+  data_subset <- model_data %>%
+    filter(group_5yr %in% c(previous_group, current_group))
+
+  # Only proceed if both levels are present
+  if (length(unique(data_subset$group_5yr)) < 2) {
+    return(NULL)
+  }
+
+  data_subset <- data_subset %>%
+    mutate(
+      group = factor(group_5yr, levels = c(previous_group, current_group)),
+      group = relevel(group, ref = previous_group)
+    )
+
+  model <- glm(
+    cases ~ group,
+    offset = log(population),
+    data = data_subset,
+    family = poisson()
+  )
+
+  tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(period = current_group)
+}
+
+period_pairs <- tibble(
+  current = periods[-1],
+  previous = periods[-length(periods)]
+)
+
+irr_previous <- map2_dfr(
+  .x = period_pairs$current,
+  .y = period_pairs$previous,
+  .f = get_lagged_irr
+)
+
+# From earlier: results_baseline
+library(glue)
+irr_baseline_clean <- results_baseline %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    period = gsub("group_5yr", "", term),
+    `IRR vs. 1995–1999` = round(estimate, 2),
+    `95% CI (vs. 1995–1999)` = glue("{round(conf.low, 2)}–{round(conf.high, 2)}"),
+    `p (vs. 1995–1999)` = ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+  ) %>%
+  select(period, `IRR vs. 1995–1999`, `95% CI (vs. 1995–1999)`, `p (vs. 1995–1999)`)
+
+
+# Clean your previous-period IRRs
+irr_previous_clean <- irr_previous %>%
+  mutate(
+    period = as.character(period),
+    `IRR vs. Previous` = round(estimate, 2),
+    `95% CI (vs. Previous)` = glue("{round(conf.low, 2)}–{round(conf.high, 2)}"),
+    `p (vs. Previous)` = ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+  ) %>%
+  select(period, `IRR vs. Previous`, `95% CI (vs. Previous)`, `p (vs. Previous)`)
+
+
+# Merge
+table2_full <- full_join(irr_baseline_clean, irr_previous_clean, by = "period") %>%
+  arrange(period)
+
+# Render it nicely
+library(gt)
+
+table2_full %>%
+  gt() %>%
+  tab_header(
+    title = "Table 2. Poisson Regression Results",
+    subtitle = "IRRs by 5-Year Period (with 95% CIs and p-values for Both Comparisons)"
+  ) %>%
+  cols_label(
+    period = "Period",
+    `IRR vs. 1995–1999` = "IRR vs. 1995–1999",
+    `95% CI (vs. 1995–1999)` = "95% CI (vs. 1995–1999)",
+    `p (vs. 1995–1999)` = "p (vs. 1995–1999)",
+    `IRR vs. Previous` = "IRR vs. Previous Period",
+    `95% CI (vs. Previous)` = "95% CI (vs. Previous)",
+    `p (vs. Previous)` = "p (vs. Previous)"
+  ) %>%
+  tab_options(table.font.size = 13)
+
+# == Suplemmentary Table 2, stroke subtypes ==
+subtype_data_5yr <- slsr_clean %>%
+  filter(!is.na(group_5yr), stroke_type != "Unknown") %>%
+  group_by(group_5yr, stroke_type) %>%
+  summarise(cases = n(), .groups = "drop") %>%
+  left_join(
+    population_totals %>%
+      mutate(group_5yr = case_when(
+        year %in% 1995:1999 ~ "1995–1999",
+        year %in% 2000:2004 ~ "2000–2004",
+        year %in% 2005:2009 ~ "2005–2009",
+        year %in% 2010:2014 ~ "2010–2014",
+        year %in% 2015:2019 ~ "2015–2019",
+        year %in% 2020:2024 ~ "2020–2024"
+      )) %>%
+      group_by(group_5yr) %>%
+      summarise(population = sum(population), .groups = "drop"),
+    by = "group_5yr"
+  )
+
+library(broom)
+library(glue)
+
+get_poisson_table <- function(data, type) {
+  df <- data %>%
+    filter(stroke_type == type) %>%
+    mutate(group_5yr = factor(group_5yr, levels = c(
+      "1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"
+    )))
+
+  # Model vs. 1995–1999
+  model_baseline <- glm(cases ~ group_5yr, offset = log(population), data = df, family = poisson())
+
+  irr_baseline <- tidy(model_baseline, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(
+      period = gsub("group_5yr", "", term),
+      `IRR vs. 1995–1999` = round(estimate, 2),
+      `95% CI (vs. 1995–1999)` = glue("{round(conf.low, 2)}–{round(conf.high, 2)}"),
+      `p (vs. 1995–1999)` = ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    ) %>%
+    select(period, `IRR vs. 1995–1999`, `95% CI (vs. 1995–1999)`, `p (vs. 1995–1999)`)
+
+  # Model vs. previous
+  periods <- levels(df$group_5yr)
+  period_pairs <- tibble::tibble(
+    current = periods[-1],
+    previous = periods[-length(periods)]
+  )
+
+  get_lagged <- function(current_group, previous_group) {
+    subset <- df %>%
+      filter(group_5yr %in% c(previous_group, current_group))
+    if (n_distinct(subset$group_5yr) < 2) return(NULL)
+
+    subset <- subset %>%
+      mutate(group = factor(group_5yr, levels = c(previous_group, current_group)))
+
+    model <- glm(cases ~ group, offset = log(population), data = subset, family = poisson())
+
+    tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(period = current_group)
+  }
+
+  irr_previous <- purrr::map2_dfr(
+    period_pairs$current, period_pairs$previous, get_lagged
+  ) %>%
+    mutate(
+      `IRR vs. Previous` = round(estimate, 2),
+      `95% CI (vs. Previous)` = glue("{round(conf.low, 2)}–{round(conf.high, 2)}"),
+      `p (vs. Previous)` = ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    ) %>%
+    select(period, `IRR vs. Previous`, `95% CI (vs. Previous)`, `p (vs. Previous)`)
+
+  full_join(irr_baseline, irr_previous, by = "period") %>%
+    mutate(stroke_type = type) %>%
+    select(stroke_type, everything())
+}
+table_s2 <- purrr::map_dfr(
+  c("Ischaemic", "PICH", "SAH"),
+  ~get_poisson_table(subtype_data_5yr, .x)
+)
+
+# Render
+library(gt)
+
+table_s2 %>%
+  gt(groupname_col = "stroke_type") %>%
+  tab_header(
+    title = "Supplementary Table S2. Poisson Regression by Stroke Subtype",
+    subtitle = "IRRs vs. Baseline and Previous Periods, with 95% CIs and p-values"
+  )
+
+
+#--------------------------------------------------
+# ETHNIC INEQUALITIES ANALYSIS
+#--------------------------------------------------
+
+slsr_clean_second <- dataset_20250422 %>%
+  filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
+  mutate(
+    dtstrk = as.Date(paste(strk_y, strk_m, strk_d, sep = "-"), format = "%Y-%m-%d"),
+    year = year(dtstrk)
+  ) %>%
+  filter(
+    !is.na(sex),
+    !is.na(age),
+    age >= 20 & age <= 200,  
+    !(dtstrk >= as.Date("2004-11-15") & dtstrk <= as.Date("2007-12-31") &
+      !(lsoa11 %in% valid_lsoas))
+  )
+
+
+# Extract ethnicity from your cleaned dataset
+slsr_clean_second <- slsr_clean_second %>%
+  mutate(
+    ethnicity = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat == 4 ~ "Black Other",
+      eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity))
+
+# Load and clean population by ethnicity
+population_ethnicity <- read.csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_ethnicity.csv"
+) %>%
+  rename(
+    year = Year,
+    ethnicity = Ethnicity,
+    population = Total
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    ethnicity = trimws(ethnicity),
+    population = as.numeric(population)
+  ) %>%
+  filter(year >= 1995, year <= 2024)
+
+
+# Count strokes by year and ethnicity
+stroke_yearly_ethnicity_fixed <- slsr_clean_second %>%
+  group_by(year, ethnicity) %>%
+  summarise(cases = n(), .groups = "drop")
+
+stroke_yearly_ethnicity_fixed <- stroke_yearly_ethnicity_fixed %>%
+  mutate(
+    cases = case_when(
+      year == 1995 & ethnicity == "Other" ~ 21,
+      year == 1995 & ethnicity == "White" ~ cases + (114 - 21),  # move 93 cases to White
+      TRUE ~ cases
+    )
+  )
+
+# Calculate crude incidence
+crude_incidence_ethnicity_yearly <- stroke_yearly_ethnicity_fixed %>%
+  left_join(population_ethnicity, by = c("year", "ethnicity")) %>%
+  mutate(
+    incidence_per_100k = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, incidence_per_100k - 1.96 * se),
+    upper_ci = incidence_per_100k + 1.96 * se
+  )
+
+# Save
+write_xlsx(crude_incidence_ethnicity_yearly, "Crude_ethnicity_yearly.xlsx")
+
+# ESP
+library(readr)
+library(dplyr)
+library(readr)
+library(dplyr)
+
+# Load population
+population_age_ethnicity <- read_csv(
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/Checked/Interpolation/population_by_age_ethnicity_sex.csv"
+) %>%
+  group_by(year = Year, ethnicity = Ethnicity, age_group = `Age Range`) %>%
+  summarise(population = sum(Total, na.rm = TRUE), .groups = "drop") %>%
+  filter(year >= 1995, year <= 2024)
+
+# Stroke counts by year, ethnicity, and age
+stroke_ethnicity_age <- slsr_clean_second %>%
+  filter(age >= 20) %>%
+  mutate(
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  ) %>%
+  filter(!is.na(age_group)) %>%
+  count(year, ethnicity, age_group, name = "cases")
+
+
+# Load ESP weights
+library(tibble)
+esp <- tibble::tibble(
+  age_group = c(
+    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+    "80-84", "85+"
+  ),
+  std_pop = c(
+    6000, 6000, 6500, 7000, 7000, 7000,
+    7000, 6500, 6000, 5500, 5000, 4000,
+    2500, 1500 + 1000  # 85–89 + 90+
+  )
+)
+
+
+# Standardise
+esp_ethnicity <- stroke_ethnicity_age %>%
+  left_join(population_age_ethnicity, by = c("year", "age_group", "ethnicity")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0) %>%
+  group_by(year, ethnicity) %>%
+ summarise(
+  numerator = sum((cases / population) * std_pop),
+  denominator = sum(std_pop),
+  std_rate = numerator / denominator * 100000,
+  se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / denominator * 100000,
+  lower_ci = pmax(0, std_rate - 1.96 * se),
+  upper_ci = std_rate + 1.96 * se,
+  .groups = "drop"
+)
+
+# Save
+write_xlsx(esp_ethnicity, "ESP_allstrokes_ethn.xlsx")
+
+# == Creating Table 3 ==
+
+# Sex all strokes counts 
+
+library(dplyr)
+library(lubridate)
+
+# Define age groups and count cases by year, sex, and age group
+library(dplyr)
+library(lubridate)
+
+stroke_counts_sex_ethnicity <- slsr_clean_second %>%
+  filter(age >= 20) %>%
+  mutate(
+    sex = factor(sex, levels = c(1, 2), labels = c("Male", "Female")),
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  ) %>%
+  count(year, sex, ethnicity, age_group, name = "cases")
+
+# Aggregate population by year, sex, and ethnicity
+population_sex_ethnicity <- population_by_ethnicity_sex %>%
+  rename(
+    year = Year,
+    ethnicity = Ethnicity,
+    sex = Sex,
+    population = Total
+  ) %>%
+  mutate(
+    ethnicity = trimws(ethnicity),
+    sex = str_to_title(trimws(sex))  # Should result in "Male" / "Female"
+  ) %>%
+  filter(year >= 1995, year <= 2024)
+
+
+# Aggregate stroke cases by year, sex, ethnicity
+crude_cases <- stroke_counts_sex_ethnicity %>%
+  group_by(year, sex, ethnicity) %>%
+  summarise(cases = sum(cases), .groups = "drop")
+
+# Calculate crude incidence
+crude_incidence_sex_ethnicity <- crude_cases %>%
+  left_join(population_sex_ethnicity, by = c("year", "sex", "ethnicity")) %>%
+  mutate(
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se
+  )
+
+** WHITE IN 1995 HASNT BEEN FIXED HERE**
+
+
