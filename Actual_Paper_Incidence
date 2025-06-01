@@ -1202,6 +1202,42 @@ crude_incidence_ethnicity_yearly <- stroke_yearly_ethnicity_fixed %>%
 write_xlsx(crude_incidence_ethnicity_yearly, "Crude_ethnicity_yearly.xlsx")
 
 # ESP
+# Fix the 21 Other
+# Step 1: Get proportions of age groups for "Other" in 1995
+other_1995 <- stroke_ethnicity_age %>%
+  filter(year == 1995, ethnicity == "Other")
+
+total_other <- sum(other_1995$cases)
+
+proportions_other_1995 <- other_1995 %>%
+  mutate(prop = cases / total_other)
+
+# Step 2: Redistribute the correct total (21) using these proportions
+corrected_other_1995 <- proportions_other_1995 %>%
+  mutate(cases = round(prop * 21)) %>%
+  select(year, ethnicity, age_group, cases)
+
+# Get original "White" age groups for 1995
+white_1995 <- stroke_ethnicity_age %>%
+  filter(year == 1995, ethnicity == "White")
+
+# Sum of old "Other" that needs to go to White: (original total - 21)
+extra_cases_white <- total_other - 21
+
+# Proportionally distribute extra cases to "White" 1995
+white_total <- sum(white_1995$cases)
+
+adjusted_white_1995 <- white_1995 %>%
+  mutate(
+    prop = cases / white_total,
+    added_cases = round(prop * extra_cases_white),
+    cases = cases + added_cases
+  ) %>%
+  select(year, ethnicity, age_group, cases)
+
+
+#=== Now calculate incidence
+
 library(readr)
 library(dplyr)
 library(readr)
@@ -1239,6 +1275,12 @@ stroke_ethnicity_age <- slsr_clean_second %>%
   filter(!is.na(age_group)) %>%
   count(year, ethnicity, age_group, name = "cases")
 
+# Adjust stroke_ethnicity_age to Other and White
+# Remove old 1995 "Other" and "White" rows
+stroke_ethnicity_age_fixed <- stroke_ethnicity_age %>%
+  filter(!(year == 1995 & ethnicity %in% c("Other", "White"))) %>%
+  bind_rows(corrected_other_1995, adjusted_white_1995)
+
 
 # Load ESP weights
 library(tibble)
@@ -1257,7 +1299,7 @@ esp <- tibble::tibble(
 
 
 # Standardise
-esp_ethnicity <- stroke_ethnicity_age %>%
+esp_ethnicity <- stroke_ethnicity_age_fixed %>%
   left_join(population_age_ethnicity, by = c("year", "age_group", "ethnicity")) %>%
   left_join(esp, by = "age_group") %>%
   filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0) %>%
@@ -1275,7 +1317,40 @@ esp_ethnicity <- stroke_ethnicity_age %>%
 # Save
 write_xlsx(esp_ethnicity, "ESP_allstrokes_ethn.xlsx")
 
-# == Creating Table 3 ==
+# == Creating Supp 3 and Table 3 ==
+
+# 1. Get original 1995 "Other" cases by age + sex
+other_1995_sex_age <- stroke_counts_sex_ethnicity %>%
+  filter(year == 1995, ethnicity == "Other")
+
+# 2. Total miscounted cases in 1995 "Other"
+total_other_cases <- sum(other_1995_sex_age$cases)
+
+# 3. Proportions by age and sex
+proportions_other_1995 <- other_1995_sex_age %>%
+  mutate(prop = cases / total_other_cases)
+# 4. Reassign only 21 cases correctly across age/sex
+corrected_other_1995 <- proportions_other_1995 %>%
+  mutate(cases = round(prop * 21)) %>%
+  select(year, sex, ethnicity, age_group, cases)
+
+# 5. Replace the "Other" cases for 1995
+stroke_counts_sex_ethnicity_fixed <- stroke_counts_sex_ethnicity %>%
+  filter(!(year == 1995 & ethnicity == "Other")) %>%
+  bind_rows(corrected_other_1995)
+# Calculate how many were misassigned originally
+misassigned_cases <- total_other_cases - 21
+
+# Now redistribute `misassigned_cases` into 1995 "White" by sex (evenly or based on proportions — your choice)
+# Let's do even split by sex for simplicity
+
+white_misassigned_by_sex <- tibble::tibble(
+  year = 1995,
+  sex = c("Male", "Female"),
+  ethnicity = "White",
+  age_group = NA,  # we can leave it out if not splitting by age
+  cases = c(round(misassigned_cases / 2), misassigned_cases - round(misassigned_cases / 2))
+)
 
 # Sex all strokes counts 
 
@@ -1309,8 +1384,20 @@ stroke_counts_sex_ethnicity <- slsr_clean_second %>%
   ) %>%
   count(year, sex, ethnicity, age_group, name = "cases")
 
-# Aggregate population by year, sex, and ethnicity
-population_sex_ethnicity <- population_by_ethnicity_sex %>%
+# Add this to the fixed dataset
+stroke_counts_sex_ethnicity_fixed <- stroke_counts_sex_ethnicity_fixed %>%
+  bind_rows(white_misassigned_by_sex)
+
+# Calculate crude ethnicity yearly
+library(dplyr)
+
+# Summarise cases by year, sex, and ethnicity
+crude_cases_sex_ethnicity <- stroke_counts_sex_ethnicity_fixed %>%
+  group_by(year, sex, ethnicity) %>%
+  summarise(cases = sum(cases), .groups = "drop")
+
+# Clean and prepare population data
+population_sex_ethnicity_clean <- population_by_ethnicity_sex %>%
   rename(
     year = Year,
     ethnicity = Ethnicity,
@@ -1319,18 +1406,211 @@ population_sex_ethnicity <- population_by_ethnicity_sex %>%
   ) %>%
   mutate(
     ethnicity = trimws(ethnicity),
-    sex = str_to_title(trimws(sex))  # Should result in "Male" / "Female"
+    sex = stringr::str_to_title(trimws(sex))  # Ensure "Male" / "Female"
   ) %>%
   filter(year >= 1995, year <= 2024)
 
+# Join cases with population and calculate crude incidence
+crude_incidence_sex_ethnicity_yearly <- crude_cases_sex_ethnicity %>%
+  left_join(population_sex_ethnicity_clean, by = c("year", "sex", "ethnicity")) %>%
+  mutate(
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se
+  )
 
-# Aggregate stroke cases by year, sex, ethnicity
-crude_cases <- stroke_counts_sex_ethnicity %>%
+# Optionally save to Excel
+writexl::write_xlsx(crude_incidence_sex_ethnicity_yearly, "Crude_Incidence_Sex_Ethnicity_Yearly.xlsx")
+
+# Lineplot
+ggplot(plot_data, aes(x = year, y = crude_rate, color = sex)) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_ribbon(
+    aes(ymin = lower_ci, ymax = upper_ci, fill = sex),
+    alpha = 0.15,
+    linetype = 0
+  ) +
+  facet_wrap(~ ethnicity, scales = "free_y", ncol = 2) +
+  scale_x_continuous(breaks = seq(1995, 2024, by = 5)) +
+  labs(
+    title = "Crude Stroke Incidence by Sex and Ethnicity (1995–2024)",
+    subtitle = "Shaded areas show 95% Confidence Intervals",
+    x = "Year",
+    y = "Crude Incidence per 100,000",
+    color = "Sex",
+    fill = "Sex"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(face = "bold", size = 13),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+# ESP
+# 1. Load ESP Weights
+esp <- tibble::tibble(
+  age_group = c(
+    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+    "80-84", "85+"
+  ),
+  std_pop = c(
+    6000, 6000, 6500, 7000, 7000, 7000,
+    7000, 6500, 6000, 5500, 5000, 4000,
+    2500, 2500  # 85-89 + 90+
+  )
+)
+
+
+# Clean column names first (makes them lowercase, snake_case, no spaces)
+library(dplyr)
+library(janitor)
+
+population_by_age_ethnicity_sex_clean <- population_by_age_ethnicity_sex_imported %>%
+  janitor::clean_names() %>%
+  rename(
+    year = year,  # Confirm this is correct, sometimes it's Year
+    ethnicity = ethnicity,
+    sex = sex,
+    age_group = age_range,  # This might be "age_range" after cleaning
+    population = total
+  ) %>%
+  mutate(
+    ethnicity = trimws(ethnicity),
+    sex = str_to_title(trimws(sex))  # Should give "Male"/"Female"
+  ) %>%
+  filter(year >= 1995, year <= 2024)
+
+# 2. Join cases + population + ESP
+esp_sex_ethnicity_yearly <- stroke_counts_sex_ethnicity_fixed %>%
+  left_join(population_by_age_ethnicity_sex_clean, by = c("year", "sex", "ethnicity", "age_group")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0)
+
+
+# 3. Standardise
+esp_yearly_output <- esp_sex_ethnicity_yearly %>%
   group_by(year, sex, ethnicity) %>%
+  summarise(
+    numerator = sum((cases / population) * std_pop),
+    denominator = sum(std_pop),
+    std_rate = numerator / denominator * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / denominator * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Optionally save to Excel
+writexl::write_xlsx(esp_yearly_output, "ESP_Incidence_Sex_Ethnicity_Yearly.xlsx")
+
+# Table 3 and S3 by subtypes
+
+library(dplyr)
+
+slsr_clean_strokes <- slsr_clean_second %>%
+  mutate(
+    stroke_type = case_when(
+      subtype %in% 1:5 ~ "Ischaemic",
+      subtype == 6 ~ "PICH",
+      subtype == 7 ~ "SAH",
+      is.na(subtype) & strksub == 1 ~ "Ischaemic",
+      is.na(subtype) & strksub == 2 ~ "PICH",
+      is.na(subtype) & strksub == 3 ~ "SAH",
+      is.na(subtype) & is.na(strksub) & stroke == 1 ~ "Ischaemic",
+      TRUE ~ "Unknown"
+    )
+  )
+library(lubridate)
+
+stroke_counts_by_type <- slsr_clean_strokes %>%
+  filter(age >= 20) %>%
+  mutate(
+    sex = factor(sex, levels = c(1, 2), labels = c("Male", "Female")),
+    age_group = case_when(
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75 & age < 80 ~ "75-79",
+      age >= 80 & age < 85 ~ "80-84",
+      age >= 85 ~ "85+"
+    )
+  ) %>%
+  count(year, sex, ethnicity, age_group, stroke_type, name = "cases")
+
+# Fix Other
+# 1. Extract 1995 "Other" cases
+other_1995_by_type <- stroke_counts_by_type %>%
+  filter(year == 1995, ethnicity == "Other")
+
+# 2. Total excess cases (to be reduced to 21)
+total_other_1995 <- sum(other_1995_by_type$cases)
+
+# 3. Proportions by sex, age group, stroke type
+other_props <- other_1995_by_type %>%
+  mutate(prop = cases / total_other_1995)
+
+# 4. Reassign correct 21 cases proportionally
+corrected_other <- other_props %>%
+  mutate(cases = round(prop * 21)) %>%
+  select(year, sex, ethnicity, age_group, stroke_type, cases)
+
+# 5. Replace "Other" 1995 and bind corrected version
+stroke_counts_fixed <- stroke_counts_by_type %>%
+  filter(!(year == 1995 & ethnicity == "Other")) %>%
+  bind_rows(corrected_other)
+
+# 6. Reassign leftover cases to "White", split by sex and stroke type
+misassigned_total <- total_other_1995 - 21
+
+# Split evenly by sex and stroke type
+white_reassign <- other_1995_by_type %>%
+  group_by(sex, stroke_type) %>%
+  summarise(prop = sum(cases) / total_other_1995, .groups = "drop") %>%
+  mutate(
+    year = 1995,
+    ethnicity = "White",
+    age_group = NA_character_,  # we are not splitting by age
+    cases = round(prop * misassigned_total)
+  ) %>%
+  select(year, sex, ethnicity, age_group, stroke_type, cases)
+
+# Add to cleaned counts
+stroke_counts_fixed <- stroke_counts_fixed %>%
+  bind_rows(white_reassign)
+
+
+#Rename columns of population
+population_by_age_ethnicity_sex_imported <- population_by_age_ethnicity_sex_imported %>%
+  rename(
+    year = Year,
+    sex = Sex,
+    ethnicity = Ethnicity,
+    age_group = Age.Range,
+    population = Total
+  )
+
+# Crude incidence
+population_sex_ethnicity <- population_by_age_ethnicity_sex_imported %>%
+  group_by(year, sex, ethnicity) %>%
+  summarise(population = sum(population, na.rm = TRUE), .groups = "drop")
+
+crude_cases_by_type <- stroke_counts_fixed %>%
+  group_by(year, sex, ethnicity, stroke_type) %>%
   summarise(cases = sum(cases), .groups = "drop")
 
-# Calculate crude incidence
-crude_incidence_sex_ethnicity <- crude_cases %>%
+crude_incidence_by_type_ethnicity <- crude_cases_by_type %>%
   left_join(population_sex_ethnicity, by = c("year", "sex", "ethnicity")) %>%
   mutate(
     crude_rate = (cases / population) * 100000,
@@ -1339,6 +1619,280 @@ crude_incidence_sex_ethnicity <- crude_cases %>%
     upper_ci = crude_rate + 1.96 * se
   )
 
-** WHITE IN 1995 HASNT BEEN FIXED HERE**
+# Save to Excel
+writexl::write_xlsx(crude_incidence_by_type_ethnicity, "CrudeEthnicitySubtype.xlsx")
+
+# ESP
+esp <- tibble::tibble(
+  age_group = c(
+    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+    "80-84", "85+"
+  ),
+  std_pop = c(
+    6000, 6000, 6500, 7000, 7000, 7000,
+    7000, 6500, 6000, 5500, 5000, 4000,
+    2500, 2500  # 85–89 + 90+
+  )
+)
+
+# Clean names
+library(janitor)
+
+population_by_age_ethnicity_sex_cleaned <- population_by_age_ethnicity_sex_imported %>%
+  janitor::clean_names()  # turns Year → year, Age.Range → age_range, etc.
+
+esp_joined <- stroke_counts_fixed %>%
+  left_join(population_by_age_ethnicity_sex_cleaned,
+            by = c("year", "sex", "ethnicity", "age_group")) %>%
+  left_join(esp, by = "age_group") %>%
+  filter(!is.na(cases), !is.na(population), !is.na(std_pop), population > 0)
+
+esp_incidence_by_type_ethnicity <- esp_joined %>%
+  group_by(year, sex, ethnicity, stroke_type) %>%
+  summarise(
+    numerator = sum((cases / population) * std_pop),
+    denominator = sum(std_pop),
+    std_rate = numerator / denominator * 100000,
+    se = sqrt(sum((std_pop^2) * (cases / (population^2)))) / denominator * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Save to Excel
+writexl::write_xlsx(esp_incidence_by_type_ethnicity, "ESPEthnicitySubtype.xlsx")
+
+# Render the table
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("glue")
+install.packages("kableExtra")
+
+library(dplyr)
+library(tidyr)
+library(glue)
+library(kableExtra)
+
+# Prepare Crude Data
+crude_long <- crude_incidence_by_type_ethnicity %>%
+  mutate(label = paste0(stroke_type, "_Crude")) %>%
+  mutate(value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year, sex, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Prepare ESP Data
+esp_long <- esp_incidence_by_type_ethnicity %>%
+  mutate(label = paste0(stroke_type, "_ESP")) %>%
+  mutate(value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year, sex, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Add All Stroke Crude
+all_crude <- crude_incidence_sex_ethnicity_yearly %>%
+  mutate(label = "All_Crude") %>%
+  mutate(value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year, sex, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Add All Stroke ESP
+all_esp <- esp_yearly_output %>%
+  mutate(label = "All_ESP") %>%
+  mutate(value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year, sex, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Join everything
+final_table <- all_crude %>%
+  full_join(all_esp, by = c("year", "sex", "ethnicity")) %>%
+  full_join(crude_long, by = c("year", "sex", "ethnicity")) %>%
+  full_join(esp_long, by = c("year", "sex", "ethnicity")) %>%
+  arrange(year, ethnicity, sex)
+
+# Format nicely
+table_rendered <- final_table %>%
+  kbl(caption = "Supplementary Table 3: Crude and ESP Stroke Incidence per 100,000 (1995–2024)",
+      align = "l", booktabs = TRUE, longtable = TRUE) %>%
+  kable_styling(latex_options = c("repeat_header", "striped", "hold_position"), full_width = FALSE)
+
+# View
+table_rendered
+
+# == Suplemmentary Table is too long is I've planned it before, lets see some other options ==
+
+library(dplyr)
+library(glue)
+library(tidyr)
+library(kableExtra)
+
+# 1. Create year bands
+create_year_band <- function(year) {
+  start <- year - ((year - 1995) %% 2)
+  end <- start + 1
+  glue("{start}–{end}")
+}
+
+# Add year bands
+crude_band <- crude_incidence_by_type_ethnicity %>%
+  mutate(year_band = create_year_band(year)) %>%
+  group_by(year_band, ethnicity, stroke_type) %>%
+  summarise(
+    cases = sum(cases),
+    population = sum(population),
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0(stroke_type, "_Crude"),
+         value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year_band, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+esp_band <- esp_incidence_by_type_ethnicity %>%
+  mutate(year_band = create_year_band(year)) %>%
+  group_by(year_band, ethnicity, stroke_type) %>%
+  summarise(
+    numerator = sum(numerator),
+    denominator = sum(denominator),
+    std_rate = numerator / denominator * 100000,
+    se = sqrt(sum((se * denominator / 100000)^2)) / denominator * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0(stroke_type, "_ESP"),
+         value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year_band, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Add "All strokes" crude and ESP (aggregated by ethnicity and year band)
+crude_all_band <- crude_incidence_sex_ethnicity_yearly %>%
+  mutate(year_band = create_year_band(year)) %>%
+  group_by(year_band, ethnicity) %>%
+  summarise(
+    cases = sum(cases),
+    population = sum(population),
+    crude_rate = (cases / population) * 100000,
+    se = sqrt(cases) / population * 100000,
+    lower_ci = pmax(0, crude_rate - 1.96 * se),
+    upper_ci = crude_rate + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  mutate(label = "All_Crude",
+         value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year_band, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+esp_all_band <- esp_yearly_output %>%
+  mutate(year_band = create_year_band(year)) %>%
+  group_by(year_band, ethnicity) %>%
+  summarise(
+    numerator = sum(numerator),
+    denominator = sum(denominator),
+    std_rate = numerator / denominator * 100000,
+    se = sqrt(sum((se * denominator / 100000)^2)) / denominator * 100000,
+    lower_ci = pmax(0, std_rate - 1.96 * se),
+    upper_ci = std_rate + 1.96 * se,
+    .groups = "drop"
+  ) %>%
+  mutate(label = "All_ESP",
+         value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(year_band, ethnicity, label, value) %>%
+  pivot_wider(names_from = label, values_from = value)
+
+# Final join
+supp_table3 <- crude_all_band %>%
+  full_join(esp_all_band, by = c("year_band", "ethnicity")) %>%
+  full_join(crude_band, by = c("year_band", "ethnicity")) %>%
+  full_join(esp_band, by = c("year_band", "ethnicity")) %>%
+  arrange(year_band, ethnicity)
+
+# Render nicely
+supp_table3 %>%
+  kbl(caption = "Supplementary Table 3: Crude and ESP-standardised stroke incidence per 100,000, by 2-year bands and ethnicity",
+      align = "l", booktabs = TRUE, longtable = TRUE) %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), full_width = FALSE)
+
+# == Table 3 ==
+library(dplyr)
+library(glue)
+library(tidyr)
+
+# 1. Create 5-year bands
+crude_all <- crude_incidence_sex_ethnicity_yearly %>%
+  mutate(period = cut(year,
+                      breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+                      labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"))) %>%
+  group_by(period, sex, ethnicity) %>%
+  summarise(
+    crude_rate = mean(crude_rate),
+    lower_ci = mean(lower_ci),
+    upper_ci = mean(upper_ci),
+    .groups = "drop"
+  ) %>%
+  mutate(label = "All_Crude",
+         value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(period, sex, ethnicity, label, value)
+
+esp_all <- esp_yearly_output %>%
+  mutate(period = cut(year,
+                      breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+                      labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"))) %>%
+  group_by(period, sex, ethnicity) %>%
+  summarise(
+    std_rate = mean(std_rate),
+    lower_ci = mean(lower_ci),
+    upper_ci = mean(upper_ci),
+    .groups = "drop"
+  ) %>%
+  mutate(label = "All_ESP",
+         value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(period, sex, ethnicity, label, value)
+
+# 2. For subtypes
+crude_subtypes <- crude_incidence_by_type_ethnicity %>%
+  mutate(period = cut(year,
+                      breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+                      labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"))) %>%
+  group_by(period, sex, ethnicity, stroke_type) %>%
+  summarise(
+    crude_rate = mean(crude_rate),
+    lower_ci = mean(lower_ci),
+    upper_ci = mean(upper_ci),
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0(stroke_type, "_Crude"),
+         value = glue("{round(crude_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(period, sex, ethnicity, label, value)
+
+esp_subtypes <- esp_incidence_by_type_ethnicity %>%
+  mutate(period = cut(year,
+                      breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+                      labels = c("1995–1999", "2000–2004", "2005–2009", "2010–2014", "2015–2019", "2020–2024"))) %>%
+  group_by(period, sex, ethnicity, stroke_type) %>%
+  summarise(
+    std_rate = mean(std_rate),
+    lower_ci = mean(lower_ci),
+    upper_ci = mean(upper_ci),
+    .groups = "drop"
+  ) %>%
+  mutate(label = paste0(stroke_type, "_ESP"),
+         value = glue("{round(std_rate, 1)} ({round(lower_ci, 1)}–{round(upper_ci, 1)})")) %>%
+  select(period, sex, ethnicity, label, value)
+
+# 3. Combine everything and pivot wide
+combined_table <- bind_rows(crude_all, esp_all, crude_subtypes, esp_subtypes) %>%
+  pivot_wider(names_from = label, values_from = value) %>%
+  arrange(period, ethnicity, sex)
+
+# 4. Optional: Export to Excel
+writexl::write_xlsx(combined_table, "MainTable_Incidence_5yearBands.xlsx")
+
+
+
+
+
 
 
