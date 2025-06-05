@@ -658,7 +658,7 @@ period_pairs <- tibble(
   comp = period_levels[-1]
 )
 
-# Safe model function
+# Model function
 run_safe_model <- function(df_group, ref, comp) {
   df_sub <- df_group %>% filter(period %in% c(ref, comp))
   
@@ -689,7 +689,7 @@ run_safe_model <- function(df_group, ref, comp) {
   }, error = function(e) NULL)
 }
 
-# Run comparisons safely for each group
+# Run comparisons for each group
 poisson_results <- poisson_data %>%
   group_by(ethnicity, stroke_class) %>%
   group_split() %>%
@@ -853,13 +853,19 @@ library(ggplot2)
 library(dplyr)
 library(ggthemes)
 
-plot_stroke_trend_clean <- function(stroke_type) {
-  nice_colors <- c(
-    "Black African" = "#e41a1c", 
-    "Black Caribbean" = "#377eb8", 
-    "White" = "#984ea3"
-  )
 
+plot_stroke_trend_clean <- function(stroke_type) {
+  # Custom pastel palette (girly but publication-ready)
+  nice_colors <- c(
+  "Black African" = "#e64173",   # Pink
+  "Black Caribbean" = "#7b3294", # Purple
+  "White" = "#1a9850"            # Green
+)
+  nice_shapes <- c(
+    "Black African"    = 16,  # filled circle
+    "Black Caribbean"  = 17,  # triangle
+    "White"            = 15   # square
+  )
   esp_asir_clean %>%
     filter(
       stroke_class == stroke_type,
@@ -873,33 +879,232 @@ plot_stroke_trend_clean <- function(stroke_type) {
                    "2010-2014", "2015-2019", "2020-2024")
       )
     ) %>%
-    ggplot(aes(x = period, y = asir, group = ethnicity, color = ethnicity)) +
-    geom_line(size = 1.2) +
-    geom_point(size = 3) +
+    ggplot(aes(x = period, y = asir, group = ethnicity, color = ethnicity, shape = ethnicity)) +
+    geom_line(size = 1.5) +
+    geom_point(size = 3.5) +
     geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), 
-                  width = 0.15, size = 0.7, alpha = 0.6) +
+                  width = 0.2, size = 0.6, alpha = 0.5) +
     scale_color_manual(values = nice_colors) +
+    scale_shape_manual(values = nice_shapes) +
     labs(
       title = paste("ESP-Standardised Incidence Rates:", stroke_type),
       subtitle = "95% Confidence Intervals by Ethnicity",
       x = "Time Period",
       y = "Incidence Rate per 100,000",
-      color = "Ethnicity"
+      color = "Ethnicity",
+      shape = "Ethnicity"
     ) +
     theme_minimal(base_size = 14) +
     theme(
       plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
-      plot.subtitle = element_text(hjust = 0.5, size = 13),
+      plot.subtitle = element_text(hjust = 0.5, size = 12),
       axis.text.x = element_text(angle = 45, hjust = 1),
       legend.position = "bottom",
-      legend.title = element_text(face = "bold")
+      legend.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank()
     )
 }
+
 
 plot_stroke_trend_clean("Total strokes")
 plot_stroke_trend_clean("Ischaemic")
 plot_stroke_trend_clean("PICH")
 plot_stroke_trend_clean("SAH")
+
+# ------------------------------------------------------------------
+# Ethnic Poisson
+# ------------------------------------------------------------------
+
+# 1. Keep only valid age groups (20+)
+valid_age_groups <- c(
+  "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+  "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+  "80-84", "85+"
+)
+
+poisson_ethnicity_data_ageadj <- stroke_cases_all_fixed %>%
+  left_join(population_fixed, by = c("period", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups  # exclude age groups <20
+  )
+
+# 2. Poisson model function WITH age adjustment
+compare_ethnicities_model_adj <- function(df) {
+  print(glue::glue("Period: {unique(df$period)}, Stroke: {unique(df$stroke_class)}"))
+  print(df %>% count(ethnicity, wt = n))
+
+  # Filter out age groups with 0 cases across *all* ethnicities
+  age_group_totals <- df %>%
+    group_by(age_group) %>%
+    summarise(total_n = sum(n, na.rm = TRUE), .groups = "drop") %>%
+    filter(total_n > 0)
+
+  df <- df %>%
+    filter(age_group %in% age_group_totals$age_group)
+
+  if (sum(df$n, na.rm = TRUE) == 0 || n_distinct(df$ethnicity) < 2) {
+    message("No usable data for this group — skipping.")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+
+# 3. Run the model for each period/stroke type
+ethnicity_comparison_results_adj <- poisson_ethnicity_data_ageadj %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(compare_ethnicities_model_adj)
+
+# 4. Add significance and formatted label
+ethnicity_comparison_results_adj <- ethnicity_comparison_results_adj %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+                       "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3)))
+  )
+
+library(writexl)
+
+write_xlsx(ethnicity_comparison_results_adj, "ethnicity_comparison_results_adj.xlsx")
+
+library(officer)
+library(flextable)
+library(dplyr)
+
+# Optionally round and format for display
+ethnicity_flex <- ethnicity_comparison_results_adj %>%
+  mutate(
+    IRR = round(IRR, 2),
+    conf.low = round(conf.low, 2),
+    conf.high = round(conf.high, 2),
+    p.value = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    label = paste0(IRR, " (", conf.low, "–", conf.high, "), p=", p.value)
+  ) %>%
+  select(period, stroke_class, comparison_group, label) %>%
+  arrange(period, stroke_class, comparison_group)
+
+# Create Word document
+doc <- read_docx()
+doc <- body_add_par(doc, "Poisson Regression: Age-Adjusted IRRs by Ethnicity", style = "heading 1")
+doc <- body_add_flextable(doc, flextable(ethnicity_flex) %>% autofit())
+print(doc, target = "ethnicity_comparison_results_adj.docx")
+
+# Too long, by strole type
+library(writexl)
+library(dplyr)
+
+# Split the data by stroke_class
+ethnicity_split_sheets <- ethnicity_comparison_results_adj %>%
+  split(.$stroke_class)
+
+# Export to Excel with one sheet per stroke type
+write_xlsx(ethnicity_split_sheets, path = "ethnicity_comparison_by_stroke_type.xlsx")
+
+
+# == Formating for the paper ==
+
+library(ggplot2)
+library(dplyr)
+
+# Clean & format results
+ethnicity_comparison_clean_adj <- ethnicity_comparison_results_adj %>%
+  filter(!comparison_group %in% "Overall") %>%
+  mutate(
+    comparison_group = factor(
+      comparison_group,
+      levels = c("Black African", "Black Caribbean", "Black Other", "Other")
+    ),
+    period = factor(period, levels = c(
+      "1995-1999", "2000-2004", "2005-2009",
+      "2010-2014", "2015-2019", "2020-2024"
+    )),
+    sig = p.value < 0.05
+  )
+
+# Step 2: Define custom color palette
+ethnicity_colors <- c(
+  "Black African" = "#e64173",
+  "Black Caribbean" = "#7b3294",
+  "Black Other" = "#1a9850",
+  "Other" = "#fdae61"
+)
+
+# Step 3: Create forest plot
+plot_ethnicity_irr <- function(df, stroke_type) {
+  df %>%
+    filter(stroke_class == stroke_type) %>%
+    distinct(period, comparison_group, IRR, conf.low, conf.high, .keep_all = TRUE) %>%
+    mutate(
+      comparison_group = factor(
+        comparison_group,
+        levels = rev(c("Black African", "Black Caribbean", "Black Other", "Other"))
+      )
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = paste("Poisson IRR Comparing Ethnicities Over Time"),
+      subtitle = paste("Stroke subtype:", stroke_type, "— IRRs (vs White)"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+
+# usage:
+plot_ethnicity_irr(ethnicity_comparison_clean_adj, "Total strokes")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj, "Ischaemic")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj, "PICH")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj, "SAH")
 
 
 
