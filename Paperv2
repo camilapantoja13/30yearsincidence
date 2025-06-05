@@ -1300,5 +1300,5 @@ plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "Ischaemic")
 plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "PICH")
 plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "SAH")
 
-# Next: All strokes need to be compared adjutsed by the IMD
+# Next: All strokes need to be compared adjutsed by the IMD - there's multicolinearity between ethnicity and IMD, that needs to be checked, reported and decide
 # Table of comorbidities
