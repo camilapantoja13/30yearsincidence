@@ -1106,5 +1106,199 @@ plot_ethnicity_irr(ethnicity_comparison_clean_adj, "Ischaemic")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj, "PICH")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj, "SAH")
 
+# ------------------------------------------------------------------
+# Adjust Poisson by SES
+# ------------------------------------------------------------------
+#Rebuild stroke cases with IMD Collapsing IMD into quintiles or tertiles and Suppress IRRs where counts are too low - 
+## But interpretation should highlight small sample sizes and possibly collapse IMD deciles for clarity and stability
+
+slsr_clean_imd_tertiles <- slsr_clean %>%
+  mutate(
+    imd_tertile = case_when(
+      imd_decile %in% 1:3 ~ "High deprivation",
+      imd_decile %in% 4:7 ~ "Medium deprivation",
+      imd_decile %in% 8:10 ~ "Low deprivation",
+      TRUE ~ "Missing"
+    )
+  )
+
+# Recreate stroke_cases
+stroke_cases_all_fixed_tertile <- slsr_clean_imd_tertiles %>%
+  filter(!is.na(age_group), !is.na(imd_tertile)) %>%
+  mutate(
+    age_group = as.character(age_group),
+    imd_tertile = factor(imd_tertile)
+  ) %>%
+  group_by(period, ethnicity, age_group, stroke_class, imd_tertile) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Merge with population
+poisson_ethnicity_data_tertile <- stroke_cases_all_fixed_tertile %>%
+  left_join(population_fixed, by = c("period", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+
+# Update model
+compare_ethnicities_model_age_tertile <- function(df) {
+  print(glue::glue("Period: {unique(df$period)}, Stroke: {unique(df$stroke_class)}"))
+  
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group),
+      imd_tertile = factor(imd_tertile)
+    )
+
+  if (sum(df$n, na.rm = TRUE) == 0 || n_distinct(df$ethnicity) < 2) {
+    return(tibble())
+  }
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group + imd_tertile,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+# Run it
+ethnicity_comparison_results_age_tertile <- poisson_ethnicity_data_tertile %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(compare_ethnicities_model_age_tertile)
 
 
+# 4. Add significance and formatted label
+ethnicity_comparison_results_age_tertile <- ethnicity_comparison_results_age_tertile %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+                       "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3)))
+  )
+
+# Split the data by stroke_class
+ethnicity_comparison_results_age_tertile_split <- ethnicity_comparison_results_age_tertile %>%
+  split(.$stroke_class)
+
+# Export to Excel with one sheet per stroke type
+write_xlsx(ethnicity_comparison_results_age_tertile_split, path = "ethnicity_imdcomparison_by_stroke_type.xlsx")
+
+# == Adjustment table ==
+
+library(dplyr)
+
+# Add adjustment column
+age_adj <- ethnicity_comparison_results_adj %>%
+  mutate(adjustment = "Age-adjusted")
+
+age_imd_tertile_adj <- ethnicity_comparison_results_age_tertile %>%
+  mutate(adjustment = "Age + IMD-adjusted (tertiles)")
+
+comparison_combined <- bind_rows(age_adj, age_imd_tertile_adj) %>%
+  mutate(
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    )
+  )
+library(tidyr)
+
+comparison_table_wide <- comparison_combined %>%
+  select(period, stroke_class, comparison_group, adjustment, IRR_label) %>%
+  pivot_wider(
+    names_from = adjustment,
+    values_from = IRR_label
+  ) %>%
+  arrange(period, stroke_class, comparison_group)
+
+# Plotting the adjusted models
+
+ethnicity_comparison_clean_tertile <- ethnicity_comparison_results_age_tertile %>%
+  filter(!comparison_group %in% c("White", "Overall")) %>%
+  mutate(
+    comparison_group = factor(
+      comparison_group,
+      levels = rev(c("Black African", "Black Caribbean", "Black Other", "Other"))
+    ),
+    period = factor(period, levels = c(
+      "1995-1999", "2000-2004", "2005-2009",
+      "2010-2014", "2015-2019", "2020-2024"
+    )),
+    sig = p.value < 0.05
+  )
+
+ethnicity_colors <- c(
+  "Black African" = "#e64173",
+  "Black Caribbean" = "#7b3294",
+  "Black Other" = "#1a9850",
+  "Other" = "#fdae61"
+)
+
+# Exclude Black Other 
+plot_ethnicity_irr <- function(df, stroke_type) {
+  df %>%
+    filter(
+      stroke_class == stroke_type,
+      !comparison_group %in% c("White", "Overall", "Black Other")  # ❗️ Exclude "Black Other"
+    ) %>%
+    distinct(period, comparison_group, IRR, conf.low, conf.high, .keep_all = TRUE) %>%
+    mutate(
+      comparison_group = factor(
+        comparison_group,
+        levels = rev(c("Black African", "Black Caribbean", "Other"))  # ❗️ Adjust order
+      )
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = "Poisson IRR Comparing Ethnicities Over Time",
+      subtitle = paste("Stroke subtype:", stroke_type, "— IRRs (vs White)"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+
+plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "Ischaemic")
+plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "PICH")
+plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "SAH")
+
+# Next: All strokes need to be compared adjutsed by the IMD
+# Table of comorbidities
