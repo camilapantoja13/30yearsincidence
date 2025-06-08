@@ -1300,5 +1300,495 @@ plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "Ischaemic")
 plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "PICH")
 plot_ethnicity_irr(ethnicity_comparison_clean_tertile, "SAH")
 
-# Next: All strokes need to be compared adjutsed by the IMD - there's multicolinearity between ethnicity and IMD, that needs to be checked, reported and decide
-# Table of comorbidities
+# ==There is multicolinearity between IMD and ethnicity and this inflate the results ==
+# Im going to split deprivation into two: low and high 
+
+# Recode IMD into binary
+slsr_clean_imd_binary <- slsr_clean %>%
+  mutate(
+    imd_binary = case_when(
+      imd_decile %in% 1:3 ~ "High deprivation",
+      imd_decile %in% 4:10 ~ "Low/Medium deprivation",
+      TRUE ~ "Missing"
+    )
+  )
+
+# Inspect
+table(slsr_clean_imd_binary$ethnicity, slsr_clean_imd_binary$imd_binary)
+
+  #                High deprivation Low/Medium deprivation Missing
+  Black African                865                    186       9
+  Black Caribbean              927                    228      21
+  Black Other                   70                     31       0
+  Other                        537                    138       8
+  White                       3642                   1042      77
+
+# Stroke case with binary IMD
+stroke_cases_all_fixed_binaryimd <- slsr_clean_imd_binary %>%
+  filter(!is.na(age_group), imd_binary != "Missing") %>%
+  group_by(period, ethnicity, age_group, stroke_class, imd_binary) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Merge with population
+poisson_ethnicity_data_binaryimd <- stroke_cases_all_fixed_binaryimd %>%
+  left_join(population_fixed, by = c("period", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+# Poisson model
+compare_ethnicities_model_age_binaryimd <- function(df) {
+  print(glue::glue("Period: {unique(df$period)}, Stroke: {unique(df$stroke_class)}"))
+
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group),
+      imd_binary = factor(imd_binary)
+    )
+
+  if (sum(df$n, na.rm = TRUE) == 0 || n_distinct(df$ethnicity) < 2) {
+    return(tibble())
+  }
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group + imd_binary,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+# Run the model
+ethnicity_comparison_results_binaryimd <- poisson_ethnicity_data_binaryimd %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(compare_ethnicities_model_age_binaryimd)
+
+library(writexl)
+write_xlsx(ethnicity_comparison_results_binaryimd, "ethnicity_comparison_results_binaryimd.xlsx")
+# it didnt change much
+
+# Check multicolinearity
+install.packages("car")
+library(car)
+
+# Filter your data
+df_vif_test <- poisson_ethnicity_data_binaryimd %>%
+  filter(period == "1995-1999", stroke_class == "Ischaemic")
+
+# Prep data
+df_vif_test <- df_vif_test %>%
+  filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+  filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+  mutate(
+    ethnicity = factor(ethnicity),
+    ethnicity = relevel(ethnicity, ref = "White"),
+    age_group = factor(age_group),
+    imd_binary = factor(imd_binary)
+  )
+# Fit the model and check vif
+model_vif <- glm(n ~ ethnicity + age_group + imd_binary,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df_vif_test)
+
+vif(model_vif)
+
+# Testing interaction models
+
+# 1. Filter your data
+interaction_data <- poisson_ethnicity_data_tertile %>%
+  filter(period == "1995-1999", stroke_class == "Ischaemic") %>%
+  mutate(
+    ethnicity = factor(ethnicity),
+    ethnicity = relevel(ethnicity, ref = "White"),
+    age_group = factor(age_group),
+    imd_tertile = factor(imd_tertile)
+  )
+
+# 2. Fit interaction model
+interaction_model <- glm(
+  n ~ ethnicity * imd_tertile + age_group,
+  offset = log(population),
+  family = poisson(link = "log"),
+  data = interaction_data
+)
+
+# 3. View model results
+library(broom)
+tidy_output <- tidy(interaction_model, exponentiate = TRUE, conf.int = TRUE)
+
+write_xlsx(tidy_output, "poisson_interaction_model_results.xlsx")
+## This got really complex and I don't really understand 
+
+# == Let's do stratified analysis into high, medium and low 
+# Create stratified dataset
+tertile_stratified_models <- poisson_ethnicity_data_tertile %>%
+  filter(imd_tertile %in% c("High deprivation", "Medium deprivation", "Low deprivation")) %>%
+  group_by(imd_tertile, period, stroke_class) %>%
+  group_split()
+
+# Poisson function WITHOUT imd_tertile (it's now stratified)
+compare_ethnicities_model_stratified <- function(df) {
+  # Filter out any invalid groups
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      age_group = factor(age_group)
+    )
+
+  # Skip if only one ethnicity or one age group
+  if (n_distinct(df$ethnicity) < 2 || n_distinct(df$age_group) < 2) {
+    message("Skipping: not enough levels for contrasts")
+    return(tibble())
+  }
+
+  # Ensure White is the reference
+  df <- df %>%
+    mutate(ethnicity = relevel(ethnicity, ref = "White"))
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period),
+        imd_tertile = unique(df$imd_tertile)
+      ) %>%
+      select(period, stroke_class, imd_tertile, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+
+#  Run all stratified models
+ethnicity_IRR_by_tertile <- tertile_stratified_models %>%
+  map_dfr(compare_ethnicities_model_stratified)
+
+#  Save or inspect
+library(writexl)
+write_xlsx(ethnicity_IRR_by_tertile, "ethnicity_IRR_by_IMD_tertile.xlsx")
+
+# Plotting these (dropping Black Other as they are too unstable)
+library(ggplot2)
+library(dplyr)
+
+# Clean and prep data
+ethnicity_IRR_by_tertile_clean <- ethnicity_IRR_by_tertile %>%
+  filter(!comparison_group %in% c("White", "Overall")) %>%
+  mutate(
+    comparison_group = factor(comparison_group,
+                              levels = rev(c("Black African", "Black Caribbean", "Black Other", "Other"))),
+    imd_tertile = factor(imd_tertile,
+                         levels = c("High deprivation", "Medium deprivation", "Low deprivation")),
+    sig = p.value < 0.05
+  )
+
+# Plot function
+plot_ethnicity_irr_stratified <- function(df, stroke_type) {
+  df %>%
+    filter(
+      stroke_class == stroke_type,
+      !comparison_group %in% c("White", "Overall", "Black Other")  # Drop unstable group
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ imd_tertile, scales = "free_x") +  # 🔍 Adjust scales
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = "Ethnic IRRs Stratified by IMD Tertile",
+      subtitle = paste("Stroke subtype:", stroke_type, "— IRRs (vs White)"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+plot_ethnicity_irr_stratified(ethnicity_IRR_by_tertile_clean, "Ischaemic")
+# Overlapped, lets do faceted to see
+
+library(ggplot2)
+library(dplyr)
+
+# Clean data for plotting
+ethnicity_IRR_facet <- ethnicity_IRR_by_tertile %>%
+  filter(
+    !comparison_group %in% c("White", "Overall", "Black Other"),  # exclude if needed
+    stroke_class == "Ischaemic"
+  ) %>%
+  mutate(
+    comparison_group = factor(
+      comparison_group,
+      levels = rev(c("Black African", "Black Caribbean", "Other"))
+    ),
+    imd_tertile = factor(imd_tertile, levels = c("High deprivation", "Medium deprivation", "Low deprivation")),
+    period = factor(period, levels = c(
+      "1995-1999", "2000-2004", "2005-2009",
+      "2010-2014", "2015-2019", "2020-2024"
+    ))
+  )
+
+# Colors
+ethnicity_colors <- c(
+  "Black African" = "#e64173",
+  "Black Caribbean" = "#7b3294",
+  "Other" = "#fdae61"
+)
+
+# Plot with facet_grid
+ggplot(ethnicity_IRR_facet, aes(x = IRR, y = comparison_group, color = comparison_group)) +
+  geom_point(size = 2.5) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.25) +
+  facet_grid(period ~ imd_tertile) +
+  scale_color_manual(values = ethnicity_colors) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Ethnic IRRs Stratified by IMD Tertile and Period",
+    subtitle = "Stroke subtype: Ischaemic — IRRs (vs White)",
+    x = "Incidence Rate Ratio (IRR)",
+    y = "Ethnicity",
+    color = "Ethnicity"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    strip.text = element_text(size = 11, face = "bold"),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    legend.position = "bottom"
+  )
+
+# Also very difficult to see. Lets plot each period separately
+# Define color palette again
+ethnicity_colors <- c(
+  "Black African" = "#e64173",
+  "Black Caribbean" = "#7b3294",
+  "Other" = "#fdae61"
+)
+
+# Prepare data
+ethnicity_IRR_by_tertile_clean <- ethnicity_IRR_by_tertile %>%
+  filter(
+    stroke_class == "Ischaemic",
+    !comparison_group %in% c("White", "Overall", "Black Other")
+  ) %>%
+  mutate(
+    comparison_group = factor(comparison_group, levels = rev(c("Black African", "Black Caribbean", "Other"))),
+    imd_tertile = factor(imd_tertile, levels = c("High deprivation", "Medium deprivation", "Low deprivation")),
+    period = factor(period, levels = c(
+      "1995-1999", "2000-2004", "2005-2009",
+      "2010-2014", "2015-2019", "2020-2024"
+    ))
+  )
+
+# Plotting function
+plot_irr_by_tertile_period <- function(df, selected_period) {
+  df %>%
+    filter(period == selected_period) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ imd_tertile, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+    labs(
+      title = paste("Ethnic IRRs Stratified by IMD Tertile"),
+      subtitle = paste("Stroke subtype: Ischaemic —", selected_period, "IRRs (vs White)"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(size = 12, face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+plot_irr_by_tertile_period(ethnicity_IRR_by_tertile_clean, "1995-1999")
+# The problem with these is that Low deprivation has too few cases and then the CIs are too big. 
+# We can collapse Medium and Low deprivation as we did before and plot those
+
+# This has been done before
+slsr_clean_imd_binary <- slsr_clean %>%
+  mutate(
+    imd_binary = case_when(
+      imd_decile %in% 1:3 ~ "High deprivation",
+      imd_decile %in% 4:10 ~ "Low/Medium deprivation",
+      TRUE ~ "Missing"
+    )
+  )
+
+# Poisson for binary IMD
+compare_ethnicities_model_age_binaryimd <- function(df) {
+  print(glue::glue("Period: {unique(df$period)}, Stroke: {unique(df$stroke_class)}, IMD: {unique(df$imd_binary)}"))
+
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group),
+      imd_binary = factor(imd_binary)
+    )
+
+  # ✅ Skip if not enough ethnic groups
+  if (sum(df$n, na.rm = TRUE) == 0 || n_distinct(df$ethnicity) < 2) {
+    message("Skipping: Less than 2 ethnic groups present")
+    return(tibble())
+  }
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period),
+        imd_binary = unique(df$imd_binary)
+      ) %>%
+      select(period, stroke_class, imd_binary, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+
+
+ethnicity_comparison_results_binaryimd <- poisson_ethnicity_data_binaryimd %>%
+  group_by(period, stroke_class, imd_binary) %>%
+  group_split() %>%
+  map_dfr(compare_ethnicities_model_age_binaryimd)
+
+# Plot
+library(ggplot2)
+library(dplyr)
+
+plot_stratified_ethnicity_irr <- function(df, stroke_type, period_input) {
+  df %>%
+    filter(
+      stroke_class == stroke_type,
+      period == period_input,
+      !comparison_group %in% c("White", "Overall", "Black Other")
+    ) %>%
+    mutate(
+      comparison_group = factor(comparison_group, levels = rev(c("Black African", "Black Caribbean", "Other"))),
+      imd_binary = factor(imd_binary, levels = c("High deprivation", "Low/Medium deprivation"))
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = imd_binary)) +
+    geom_point(size = 3, position = position_dodge(width = 0.6)) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2, position = position_dodge(width = 0.6)) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = paste("IRR by Ethnicity (vs White) –", stroke_type),
+      subtitle = paste0("Period: ", period_input),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "IMD Level"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      legend.position = "bottom",
+      plot.title.position = "plot",  # ✅ Ensures proper spacing
+      plot.margin = margin(t = 15, r = 15, b = 30, l = 15)  # ✅ Extra bottom space for legend & subtitle
+    ) +
+    guides(color = guide_legend(override.aes = list(size = 4)))
+}
+
+plot_stratified_ethnicity_irr(ethnicity_comparison_results_binaryimd, "Ischaemic", "2015-2019")
+
+# Save all
+# Unique stroke types and periods
+stroke_types <- unique(ethnicity_comparison_results_binaryimd$stroke_class)
+periods <- unique(ethnicity_comparison_results_binaryimd$period)
+
+# Loop through each combination
+for (stroke in stroke_types) {
+  for (period in periods) {
+    
+    # Build the plot
+    p <- plot_stratified_ethnicity_irr(
+      df = ethnicity_comparison_results_binaryimd,
+      stroke_type = stroke,
+      period_input = period
+    )
+    
+    # Define filename
+    filename <- paste0("IRR_ethnicity_", gsub(" ", "_", tolower(period)), "_", tolower(stroke), ".png")
+    
+    # Save with extra height and margin to fit legend
+    ggsave(filename,
+           plot = p,
+           width = 8,
+           height = 7,       # ✅ Extra height
+           dpi = 300,
+           units = "in")
+    
+    message("Saved: ", filename)
+  }
+}
+library(writexl)
+write_xlsx(ethnicity_comparison_results_binaryimd, "ethnicity_comparison_results_binaryimd.xlsx")
+
+# ------------------------------------------------------------------
+# Investigating causes of inequalities
+# ------------------------------------------------------------------
+
+1. Education
