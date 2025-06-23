@@ -1791,4 +1791,218 @@ write_xlsx(ethnicity_comparison_results_binaryimd, "ethnicity_comparison_results
 # Investigating causes of inequalities
 # ------------------------------------------------------------------
 
-1. Education
+1. Counts by ethnicity and SES
+
+slsr_clean %>%
+  filter(!is.na(ethnicity), ethnicity != "Unknown") %>%
+  count(ethnicity, name = "total_cases")
+
+2. Ethnicity and period
+slsr_clean %>%
+  filter(!is.na(ethnicity), ethnicity != "Unknown") %>%
+  count(period, ethnicity, name = "cases") %>%
+  arrange(period, ethnicity)
+
+3. ethnicity and period and SES
+slsr_clean_imd_binary %>%
+  filter(!is.na(ethnicity), ethnicity != "Unknown", imd_binary != "Missing") %>%
+  count(period, ethnicity, imd_binary, name = "cases") %>%
+  arrange(period, ethnicity, imd_binary)
+
+4. Export ethnicity and period and SES
+ethnicity_ses_counts <- slsr_clean_imd_binary %>%
+  filter(!is.na(ethnicity), ethnicity != "Unknown", imd_binary != "Missing") %>%
+  count(period, ethnicity, imd_binary, name = "cases") %>%
+  arrange(period, ethnicity, imd_binary)
+
+write_xlsx(ethnicity_ses_counts, "ethnicity_ses_counts_by_period.xlsx")
+
+5. Reorganising the table
+library(tidyr)
+
+ethnicity_ses_wide <- ethnicity_ses_counts %>%
+  pivot_wider(
+    names_from = period,
+    values_from = cases,
+    values_fill = 0
+  )
+
+write_xlsx(ethnicity_ses_wide, "ethnicity_ses_counts_wide.xlsx")
+
+6. Differences (Chi-square) in SES distribution per period
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+#recoding ethnicity
+slsr_clean_imd_binary <- slsr_clean_imd_binary %>%
+  mutate(ethnicity = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat == 4 ~ "Black Other",
+    eth6cat == 5 ~ "Other",
+    eth6cat == 99 ~ "Unknown",
+    TRUE ~ NA_character_
+  ))
+
+# Filter relevant data
+filtered_data <- slsr_clean_imd_binary %>%
+  filter(!is.na(ethnicity), ethnicity != "Unknown", imd_binary != "Missing", period != "Outside range")
+
+# Get unique periods and non-White ethnicities
+periods <- unique(filtered_data$period)
+ethnicities <- unique(filtered_data$ethnicity)
+ethnicities <- ethnicities[ethnicities != "White"]  # Compare others vs White
+
+# Function to run chi-square test between each ethnicity vs White per period
+run_chi_per_ethnicity_period <- function(period_value, ethnicity_value) {
+  df <- filtered_data %>%
+    filter(period == period_value, ethnicity %in% c("White", ethnicity_value)) %>%
+    count(ethnicity, imd_binary) %>%
+    pivot_wider(names_from = imd_binary, values_from = n, values_fill = 0)
+  
+  if (nrow(df) == 2 && all(rowSums(df[,-1]) > 0)) {
+    test <- chisq.test(as.matrix(df[,-1]))
+    tibble(
+      period = period_value,
+      ethnicity_vs_white = ethnicity_value,
+      p_value = test$p.value,
+      statistic = test$statistic
+    )
+  } else {
+    tibble(period = period_value, ethnicity_vs_white = ethnicity_value, p_value = NA, statistic = NA)
+  }
+}
+
+# Apply across all unique combinations of period and ethnicity
+results <- expand.grid(
+  period = as.character(periods),
+  ethnicity = as.character(ethnicities),
+  stringsAsFactors = FALSE
+) %>%
+  pmap_dfr(~ run_chi_per_ethnicity_period(..1, ..2))
+
+
+print(results, n = Inf)
+
+# make it a nice table
+library(gt)
+
+results %>%
+  mutate(
+    p_value = signif(p_value, 3),
+    statistic = round(statistic, 2)
+  ) %>%
+  arrange(period, ethnicity_vs_white) %>%
+  gt() %>%
+  tab_header(
+    title = "Chi-squared Test: SES Differences vs White by Period",
+    subtitle = "Comparing High vs Low/Medium deprivation across ethnic groups"
+  ) %>%
+  fmt_number(columns = c(p_value, statistic), decimals = 3) %>%
+  cols_label(
+    period = "Period",
+    ethnicity_vs_white = "Ethnic Group (vs White)",
+    p_value = "P-value",
+    statistic = "Chi-squared Statistic"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(columns = p_value, rows = p_value < 0.05)
+  )
+
+#### Trying to make the main table
+
+#recode variables
+slsr_clean_main <- slsr_clean_imd_binary %>%
+  mutate(across(
+    c(rfphyp, rfpcho, rfpdep, rfpaf, sld_rec,
+      kidney_rec, rfppvd, rfpihd, rfpmi, rfpdia, rfdrik),
+    ~ ifelse(. == 2, 1, ifelse(. == 1, 0, NA))
+  ))
+
+slsr_clean_main <- slsr_clean_main %>%
+  mutate(
+    ever_smoker = case_when(
+      rfsmok %in% c(2, 3) ~ 1,
+      rfsmok == 1 ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+# Summary
+library(dplyr)
+library(tidyr)
+library(broom)
+
+# Risk factors to process
+risk_factors <- c("rfphyp", "rfpcho", "rfpdep", "rfpaf", "sld_rec",
+                  "kidney_rec", "rfppvd", "rfpihd", "rfpmi", "rfpdia", "rfdrik", "ever_smoker", "bmindex")
+
+# Summary function
+summarise_risk_factor <- function(data, var) {
+  df <- data %>%
+    group_by(ethnicity, imd_binary) %>%
+    summarise(
+      N = sum(!is.na(.data[[var]])),
+      Mean = mean(.data[[var]], na.rm = TRUE),
+      SD = if (var == "bmindex") sd(.data[[var]], na.rm = TRUE) else NA_real_,
+      .groups = "drop"
+    ) %>%
+    mutate(
+      `Risk Factor` = var,
+      `Prevalence Display` = if (var == "bmindex") {
+        sprintf("%.1f (%.1f)", Mean, SD)
+      } else {
+        sprintf("%.1f", Mean * 100)
+      }
+    ) %>%
+    select(`Risk Factor`, ethnicity, imd_binary, N, `Prevalence Display`)
+  
+  return(df)
+}
+
+# adding the statistical tests (chi-squares and t-test)
+get_p_value <- function(data, var, ethnicity_group, ses_group) {
+  test_data <- data %>%
+    filter(ethnicity %in% c("White", ethnicity_group), imd_binary == ses_group) %>%
+    select(ethnicity, all_of(var)) %>%
+    drop_na()
+
+  if (length(unique(test_data$ethnicity)) < 2) return(NA)
+
+  if (var == "bmindex") {
+    t.test(value ~ ethnicity, data = rename(test_data, value = all_of(var)))$p.value
+  } else {
+    tbl <- table(test_data$ethnicity, test_data[[var]])
+    if (all(dim(tbl) == c(2, 2))) chisq.test(tbl)$p.value else NA
+  }
+}
+
+# Combine summaries
+summary_table <- bind_rows(lapply(risk_factors, summarise_risk_factor, data = slsr_clean_main))
+summary_table <- summary_table %>%
+  rowwise() %>%
+  mutate(
+    `P (vs White)` = if (ethnicity != "White") {
+      get_p_value(slsr_clean_main, `Risk Factor`, ethnicity, imd_binary)
+    } else {
+      NA_real_
+    }
+  ) %>%
+  ungroup() %>%
+  mutate(
+    `P (vs White)` = case_when(
+      is.na(`P (vs White)`) ~ NA_character_,
+      `P (vs White)` < 0.001 ~ "<0.001",
+      TRUE ~ sprintf("%.3f", `P (vs White)`)
+    )
+  )
+
+write_xlsx(summary_table, "summary_table.xlsx")
+
+white_reference <- summary_table %>%
+  filter(ethnicity == "White") %>%
+  select(`Risk Factor`, imd_binary, white_prevalence = Prevalence)
+
