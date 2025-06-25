@@ -243,6 +243,42 @@ slsr_clean <- slsr_clean %>%
   ) %>%
   filter(!is.na(ethnicity))
 
+## Fixing the "Others" problem
+#Counting
+slsr_clean %>%
+    filter(strk_y >= 1995, strk_y <= 1995, eth6cat == 5) %>%
+    summarise(n_other = n())
+
+ids_others_1995_old <- slsr_clean %>%
+  filter(strk_y == 1995, eth6cat == 5) %>%
+  pull(id)
+ids_others_1995_new <- SES_inequality_Dec_24 %>%
+  filter(strk_y == 1995, eth6cat == 5) %>%
+  pull(id)
+
+# Find mismatches (those in old dataset but not in new "Others")
+mismatched_ids <- setdiff(ids_others_1995_old, ids_others_1995_new)
+
+# Check their new eth6cat values in SES_inequality_Dec_24
+SES_inequality_Dec_24 %>%
+  filter(id %in% mismatched_ids) %>%
+  count(eth6cat)
+
+library(dplyr)
+
+# Step 1: Create a lookup table with id and the corrected eth6cat
+eth6cat_lookup <- SES_inequality_Dec_24 %>%
+  select(id, corrected_eth6cat = eth6cat)
+
+# Step 2: Join the corrected values into slsr_clean and replace eth6cat
+slsr_clean <- slsr_clean %>%
+  left_join(eth6cat_lookup, by = "id") %>%
+  mutate(
+    eth6cat = if_else(!is.na(corrected_eth6cat), corrected_eth6cat, eth6cat)
+  ) %>%
+  select(-corrected_eth6cat)  # Remove the temporary column
+
+
 # ------------------------------------------------------------------
 # Table 1
 # ------------------------------------------------------------------
