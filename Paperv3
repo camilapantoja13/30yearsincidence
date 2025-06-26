@@ -1375,5 +1375,292 @@ write_xlsx(decile_split, "IRR_by_IMD_Decile_by_StrokeType.xlsx")
 
 # We cannot do that right now as we don't have IMD for the population
 
+# ------------------------------------------------------------------
+# Then lets create the plots
+# ------------------------------------------------------------------
+library(dplyr)
+library(ggplot2)
+
+# Clean & prepare results
+ethnicity_results_tertile_clean <- results_tertile %>%
+  filter(!comparison_group %in% c("Black Other", "Unknown", "Overall")) %>%
+  mutate(
+    comparison_group = factor(comparison_group, levels = c("Black African", "Black Caribbean", "Other")),
+    period = factor(period, levels = c(
+      "1995-1999", "2000-2004", "2005-2009",
+      "2010-2014", "2015-2019", "2020-2024"
+    )),
+    sig = p.value < 0.05
+  )
+
+# Ethnicity colors consistent with prior plots
+ethnicity_colors <- c(
+  "Black African" = "#e64173",
+  "Black Caribbean" = "#7b3294",
+  "Other" = "#fdae61"
+)
+
+# Forest plot function
+plot_poisson_adjusted <- function(df, stroke_type) {
+  df %>%
+    filter(stroke_class == stroke_type) %>%
+    mutate(
+      comparison_group = factor(
+        comparison_group,
+        levels = rev(c("Black African", "Black Caribbean", "Other"))  # 👈 Correct order
+      )
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = "Adjusted Incidence Rate Ratios by Ethnicity",
+      subtitle = paste("Stroke subtype:", stroke_type, "— Adjusted for Age and SES (IMD tertile)"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+# Plot for each stroke subtype
+plot_poisson_adjusted(ethnicity_results_tertile_clean, "Total strokes")
+plot_poisson_adjusted(ethnicity_results_tertile_clean, "Ischaemic")
+plot_poisson_adjusted(ethnicity_results_tertile_clean, "PICH")
+plot_poisson_adjusted(ethnicity_results_tertile_clean, "SAH")
+
+# ------------------------------------------------------------------
+# Checking if its better IRR and aIRR by decades 
+# ------------------------------------------------------------------
+
+# Keep only valid age groups (20+)
+valid_age_groups <- c(
+  "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+  "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+  "80-84", "85+"
+)
+
+# Create a new variable called period_decade
+stroke_cases_all <- stroke_cases_all %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+
+# For SES-adjusted cases
+slsr_clean_imd_groups <- slsr_clean_imd_groups %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+
+# Create the decade in the population dataset
+population_period_age_ethnicity_all <- population_period_age_ethnicity_all %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+
+# Join for analysis
+poisson_ethnicity_data_ageadj_decade <- stroke_cases_all %>%
+  filter(!ethnicity %in% "Black Other") %>%  # exclude Black Other
+  left_join(population_period_age_ethnicity_all,
+            by = c("period_decade", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+
+
+# Poisson model function WITH age adjustment
+compare_ethnicities_model_adj <- function(df) {
+  print(glue::glue("Period: {unique(df$period_decade)}, Stroke: {unique(df$stroke_class)}"))
+  print(df %>% count(ethnicity, wt = n))
+
+  # Filter out age groups with 0 cases across all ethnicities
+  age_group_totals <- df %>%
+    group_by(age_group) %>%
+    summarise(total_n = sum(n, na.rm = TRUE), .groups = "drop") %>%
+    filter(total_n > 0)
+
+  df <- df %>%
+    filter(age_group %in% age_group_totals$age_group)
+
+  if (sum(df$n, na.rm = TRUE) == 0 || n_distinct(df$ethnicity) < 2) {
+    message("No usable data for this group — skipping.")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period_decade)  # now using the decade variable
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+
+# Run the model for each period/stroke type
+ethnicity_comparison_results_adj_decade <- poisson_ethnicity_data_ageadj_decade %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(compare_ethnicities_model_adj)
+
+
+# Add significance and formatted label
+ethnicity_comparison_results_adj_decade <- ethnicity_comparison_results_adj_decade %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    )
+  )
+
+ethnicity_comparison_results_adj_decade <- ethnicity_comparison_results_adj_decade %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    )
+  )
+
+#Save to excel
+ethnicity_split_sheets_decade <- ethnicity_comparison_results_adj_decade %>%
+  split(.$stroke_class)
+
+write_xlsx(ethnicity_split_sheets_decade, path = "ethnicity_comparison_by_stroke_type_decade.xlsx")
+
+# Save to word
+ethnicity_flex_decade <- ethnicity_comparison_results_adj_decade %>%
+  mutate(
+    IRR = round(IRR, 2),
+    conf.low = round(conf.low, 2),
+    conf.high = round(conf.high, 2),
+    p.value = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    label = paste0(IRR, " (", conf.low, "–", conf.high, "), p=", p.value)
+  ) %>%
+  select(period = period, stroke_class, comparison_group, label) %>%
+  arrange(period, stroke_class, comparison_group)
+
+# Create Word document
+doc <- read_docx()
+doc <- body_add_par(doc, "Poisson Regression (Decade): Age-Adjusted IRRs by Ethnicity", style = "heading 1")
+doc <- body_add_flextable(doc, flextable(ethnicity_flex_decade) %>% autofit())
+print(doc, target = "ethnicity_comparison_results_adj_decade.docx")
+
+
+# Plots
+
+library(ggplot2)
+library(dplyr)
+
+# Clean & format results
+ethnicity_comparison_clean_adj_decade <- ethnicity_comparison_results_adj_decade %>%
+  filter(!comparison_group %in% c("Overall", "Black Other", "Unknown")) %>%
+  mutate(
+    comparison_group = factor(
+      comparison_group,
+      levels = c("Black African", "Black Caribbean", "Other")
+    ),
+    period = factor(period, levels = c("1995-2004", "2005-2014", "2015-2024")),
+    sig = p.value < 0.05
+  )
+
+
+# Same custom color palette to match previous figures
+ethnicity_colors <- c(
+  "Black African" = "#e64173",      # Pinkish-red
+  "Black Caribbean" = "#7b3294",    # Purple
+  "Other" = "#fdae61"               # Orange/yellow (original color)
+)
+
+# Same forest plot function
+plot_ethnicity_irr <- function(df, stroke_type) {
+  df %>%
+    filter(stroke_class == stroke_type) %>%
+    distinct(period, comparison_group, IRR, conf.low, conf.high, .keep_all = TRUE) %>%
+    mutate(
+      comparison_group = factor(
+        comparison_group,
+        levels = rev(c("Black African", "Black Caribbean", "Other"))
+      )
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = "Incidence Rate Ratios by Ethnicity Over Time",
+      subtitle = paste("Stroke subtype:", stroke_type, "— Reference: White"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+# usage:
+plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "Total strokes")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "Ischaemic")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "PICH")
+plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "SAH")
+
+# == IMD adjusted by decades ==
+Next step, repeat the IMD adjusted by decades
+And then the CVRF
 
 
