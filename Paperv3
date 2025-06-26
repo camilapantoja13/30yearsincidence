@@ -1171,3 +1171,208 @@ plot_ethnicity_irr(ethnicity_comparison_clean_adj, "Total strokes")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj, "Ischaemic")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj, "PICH")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj, "SAH")
+
+# ------------------------------------------------------------------
+# Ethnic Poisson Adjusted by IMD
+# ------------------------------------------------------------------
+# Create IMD groups in the cleaned dataset
+slsr_clean_imd_groups <- slsr_clean %>%
+  mutate(
+    imd_tertile = case_when(
+      imd_decile %in% 1:3 ~ "High deprivation",
+      imd_decile %in% 4:7 ~ "Medium deprivation",
+      imd_decile %in% 8:10 ~ "Low deprivation",
+      TRUE ~ NA_character_
+    ),
+    imd_decile_group = as.character(imd_decile)  # For decile sensitivity
+  )
+
+# Generate cases by age, stroke type, ethnicity, IMD tertile/decile
+# Start with subtype counts (Ischaemic, PICH, SAH)
+stroke_cases_imd_subtypes <- slsr_clean_imd_groups %>%
+  filter(!is.na(age_group), !is.na(imd_tertile), !is.na(imd_decile)) %>%
+  filter(stroke_class %in% c("Ischaemic", "PICH", "SAH")) %>%
+  group_by(period, ethnicity, age_group, stroke_class, imd_tertile, imd_decile_group) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Calculate total strokes across subtypes
+stroke_cases_imd_total <- stroke_cases_imd_subtypes %>%
+  group_by(period, ethnicity, age_group, imd_tertile, imd_decile_group) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(stroke_class = "Total strokes")  # Label total strokes
+
+# Combine into full dataset
+stroke_cases_imd <- bind_rows(stroke_cases_imd_subtypes, stroke_cases_imd_total)
+
+# Merge with population and filter valid age groups
+valid_age_groups <- c(
+  "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+  "50-54", "55-59", "60-64", "65-69", "70-74", "75+"
+)
+
+poisson_ethnicity_imd_data <- stroke_cases_imd %>%
+  filter(!ethnicity %in% c("Black Other", "Unknown")) %>%  # Remove unwanted groups
+  left_join(population_period_age_ethnicity, by = c("period", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+
+# Define the model
+run_poisson_ethnicity_model <- function(df, imd_var = "imd_tertile") {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0])
+
+  # SKIP if White not in ethnicity
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    message("Skipping: White not present or insufficient data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group),
+      imd = factor(.data[[imd_var]])
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group + imd,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+
+# Primary analysis ( Age + IMD tertile)
+results_tertile <- poisson_ethnicity_imd_data %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(~ run_poisson_ethnicity_model(.x, "imd_tertile"))
+
+results_tertile <- results_tertile %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    )
+  )
+
+# Sensitivity (Age + IMD decile)
+results_decile <- poisson_ethnicity_imd_data %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(~ run_poisson_ethnicity_model(.x, "imd_decile_group"))
+
+results_decile <- results_decile %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+    )
+  )
+
+# Compare them
+library(tidyr)
+
+comparison_table <- combined_adjusted_results %>%
+  select(period, stroke_class, comparison_group, adjustment, IRR_label) %>%
+  pivot_wider(names_from = adjustment, values_from = IRR_label)
+
+# Saving them
+library(dplyr)
+
+# Add formatted label
+
+# For TERTILES
+results_tertile_fmt <- results_tertile %>%
+  mutate(
+    change = as.character(case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    )),
+    p_formatted = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2), "), p=", p_formatted
+    )
+  )
+
+
+# For DECILES
+results_decile_fmt <- results_decile %>%
+  mutate(
+    change = as.character(case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    )),
+    p_formatted = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2), "), p=", p_formatted
+    )
+  )
+
+
+# Split by stroke_class
+library(dplyr)
+library(writexl)
+
+# Split into separate tibbles by stroke_class
+tertile_split <- results_tertile_fmt %>%
+  split(.$stroke_class)
+
+decile_split <- results_decile_fmt %>%
+  split(.$stroke_class)
+
+
+# Save each stroke type to a sheet in a single workbook for tertiles
+write_xlsx(tertile_split, "IRR_by_IMD_Tertile_by_StrokeType.xlsx")
+
+# Save each stroke type to a sheet in a single workbook for deciles
+write_xlsx(decile_split, "IRR_by_IMD_Decile_by_StrokeType.xlsx")
+
+# ------------------------------------------------------------------
+# SES its not a cofounding variable but a mediator in this cohort
+# ------------------------------------------------------------------
+# We explored whether socioeconomic deprivation acted as a confounder or mediator in the association between ethnicity and stroke incidence. 
+# Adjusting for deprivation did not attenuate the inequalities, and in some cases, amplified them. 
+# This suggests that SES may lie on the causal pathway between ethnicity and stroke, and adjusting for it may underestimate the total effect.
+# Alternatively, SES may modify the effect of ethnicity, which warrants further investigation -> using model interaction
+
+# Basic mediation model (not including cofounding by CVRF as its not available for the population)
+# Ethnicity → SES → Stroke
+
+
+
+
