@@ -1373,6 +1373,7 @@ write_xlsx(decile_split, "IRR_by_IMD_Decile_by_StrokeType.xlsx")
 # Basic mediation model (not including cofounding by CVRF as its not available for the population)
 # Ethnicity → SES → Stroke
 
+# We cannot do that right now as we don't have IMD for the population
 
 
 
