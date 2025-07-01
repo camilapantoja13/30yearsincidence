@@ -244,6 +244,7 @@ slsr_clean <- slsr_clean %>%
   filter(!is.na(ethnicity))
 
 ## Fixing the "Others" problem
+## Import Eva's Dataset
 #Counting
 slsr_clean %>%
     filter(strk_y >= 1995, strk_y <= 1995, eth6cat == 5) %>%
