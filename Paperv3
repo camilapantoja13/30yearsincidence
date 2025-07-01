@@ -1438,6 +1438,18 @@ plot_poisson_adjusted(ethnicity_results_tertile_clean, "Ischaemic")
 plot_poisson_adjusted(ethnicity_results_tertile_clean, "PICH")
 plot_poisson_adjusted(ethnicity_results_tertile_clean, "SAH")
 
+#Saving them all
+stroke_types <- c("Total strokes", "Ischaemic", "PICH", "SAH")
+
+for (stype in stroke_types) {
+  ggsave(
+    filename = paste0("IRR_", gsub(" ", "", stype), "_Tertile.png"),
+    plot = plot_poisson_adjusted(ethnicity_results_tertile_clean, stype),
+    width = 10, height = 4.5, dpi = 300, bg = "white"
+  )
+}
+
+
 # ------------------------------------------------------------------
 # Checking if its better IRR and aIRR by decades 
 # ------------------------------------------------------------------
@@ -1659,8 +1671,825 @@ plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "Ischaemic")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "PICH")
 plot_ethnicity_irr(ethnicity_comparison_clean_adj_decade, "SAH")
 
+
 # == IMD adjusted by decades ==
-Next step, repeat the IMD adjusted by decades
-And then the CVRF
+# Create decade groups
+slsr_clean_imd_groups <- slsr_clean_imd_groups %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+
+# Stroke cases by decade
+stroke_cases_imd_subtypes_decade <- slsr_clean_imd_groups %>%
+  filter(!is.na(age_group), !is.na(imd_tertile), !is.na(period_decade)) %>%
+  filter(stroke_class %in% c("Ischaemic", "PICH", "SAH")) %>%
+  group_by(period_decade, ethnicity, age_group, stroke_class, imd_tertile) %>%
+  summarise(n = n(), .groups = "drop")
+
+stroke_cases_imd_total_decade <- stroke_cases_imd_subtypes_decade %>%
+  group_by(period_decade, ethnicity, age_group, imd_tertile) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(stroke_class = "Total strokes")
+
+stroke_cases_imd_decade <- bind_rows(stroke_cases_imd_subtypes_decade, stroke_cases_imd_total_decade)
+
+# Merge with population
+poisson_ethnicity_imd_data_decade <- stroke_cases_imd_decade %>%
+  filter(!ethnicity %in% c("Black Other", "Unknown")) %>%
+  left_join(population_period_age_ethnicity_all,  
+            by = c("period_decade", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+# IMD model Poisson
+run_poisson_ethnicity_model <- function(df, imd_var = "imd_tertile") {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0])
+
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    message("Skipping: White not present or insufficient data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group),
+      imd = factor(.data[[imd_var]])
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity + age_group + imd,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        IRR = estimate,
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period_decade) 
+      ) %>%
+      select(period, stroke_class, reference_group, comparison_group,
+             IRR, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+# Run it and format results
+results_tertile_decade <- poisson_ethnicity_imd_data_decade %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(~ run_poisson_ethnicity_model(.x, "imd_tertile"))
+
+# Formating
+results_tertile_decade_fmt <- results_tertile_decade %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & IRR > 1 ~ "↑",
+      p.value < 0.05 & IRR < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    p_formatted = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    IRR_label = paste0(
+      round(IRR, 2), " (", round(conf.low, 2), "–", round(conf.high, 2), "), p=", p_formatted
+    )
+  )
+
+# Save it
+library(writexl)
+
+tertile_decade_split <- results_tertile_decade_fmt %>%
+  split(.$stroke_class)
+
+write_xlsx(tertile_decade_split, path = "IRR_by_IMD_Tertile_by_Decade.xlsx")
+
+# And plotting them
+# Load required packages
+library(dplyr)
+library(ggplot2)
+
+# Prepare and clean the data
+ethnicity_comparison_clean_adj_decade <- results_tertile_decade_fmt %>%
+  filter(!comparison_group %in% c("Overall", "Black Other")) %>%
+  mutate(
+    comparison_group = factor(
+      comparison_group,
+      levels = c("Black African", "Black Caribbean", "Other")
+    ),
+    period_decade = factor(period, levels = c("1995-2004", "2005-2014", "2015-2024")),
+    sig = p.value < 0.05
+  )
+# Custom color palette (same as before)
+ethnicity_colors <- c(
+  "Black African" = "#e64173",      # Pinkish-red
+  "Black Caribbean" = "#7b3294",    # Purple
+  "Other" = "#fdae61"               # Orange/yellow
+)
+
+# Forest plot function using decade groupings
+plot_ethnicity_irr_decade <- function(df, stroke_type) {
+  df %>%
+    filter(stroke_class == stroke_type) %>%
+    distinct(period_decade, comparison_group, IRR, conf.low, conf.high, .keep_all = TRUE) %>%
+    mutate(
+      comparison_group = factor(comparison_group,
+                                levels = rev(c("Black African", "Black Caribbean", "Other")))
+    ) %>%
+    ggplot(aes(x = IRR, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period_decade, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = "Incidence Rate Ratios by Ethnicity (Adjusted for Age and IMD)",
+      subtitle = paste("Stroke subtype:", stroke_type, "— Reference: White"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+# Example usage
+plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "Total strokes")
+plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "Ischaemic")
+plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "PICH")
+plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "SAH")
+
+# Save them 
+ggsave("aIRR_by_EthnicityandDecade_TotalStrokes.png",
+       plot = plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "Total strokes"),
+       width = 10,
+       height = 6,
+       dpi = 300)
+ggsave("aIRR_by_EthnicityandDecade_IschStrokes.png",
+       plot = plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "Ischaemic"),
+       width = 10,
+       height = 6,
+       dpi = 300)
+ggsave("aIRR_by_EthnicityandDecade_PICHStrokes.png",
+       plot = plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "PICH"),
+       width = 10,
+       height = 6,
+       dpi = 300)
+ggsave("aIRR_by_EthnicityandDecade_SAHStrokes.png",
+       plot = plot_ethnicity_irr_decade(ethnicity_comparison_clean_adj_decade, "SAH"),
+       width = 10,
+       height = 6,
+       dpi = 300)
+
+# ------------------------------------------------------------------
+# Let's keep doing it with 5-year groups
+# Interaction terms and marginal effects
+# ------------------------------------------------------------------
+#Interaction models and margins
+
+library(dplyr)
+
+# Include sex in data
+# Stroke subtypes (Ischaemic, PICH, SAH) grouped by sex
+stroke_cases_imd_subtypes <- slsr_clean_imd_groups %>%
+  filter(
+    !is.na(age_group), !is.na(imd_tertile), !is.na(imd_decile), !is.na(sex),
+    stroke_class %in% c("Ischaemic", "PICH", "SAH")
+  ) %>%
+  group_by(period, ethnicity, age_group, sex, stroke_class, imd_tertile, imd_decile_group) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Total strokes across subtypes, still with sex
+stroke_cases_imd_total <- stroke_cases_imd_subtypes %>%
+  group_by(period, ethnicity, age_group, sex, imd_tertile, imd_decile_group) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(stroke_class = "Total strokes")
+
+# Combine them
+stroke_cases_imd <- bind_rows(stroke_cases_imd_subtypes, stroke_cases_imd_total)
+
+#rebuild poisson_ethnicity_imd_data with sex
+poisson_ethnicity_imd_data <- stroke_cases_imd %>%
+  filter(!ethnicity %in% c("Black Other", "Unknown")) %>%
+  left_join(population_period_age_ethnicity, by = c("period", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups
+  )
+
+# Fit poisson with interaction terms
+rm(df)
+df <- poisson_ethnicity_imd_data
+
+df <- df %>%
+  mutate(
+    ethnicity = factor(ethnicity),
+    ethnicity = relevel(ethnicity, ref = "White"),
+    imd_tertile = factor(imd_tertile, levels = c("Low deprivation", "Medium deprivation", "High deprivation")),  # 👈 New order
+    imd = imd_tertile,  # If you're using this alias
+    age_group = factor(age_group),
+    sex = factor(sex)
+  )
+
+library(broom)
+
+model_interaction <- glm(
+  n ~ ethnicity * imd_tertile + age_group + sex,
+  offset = log(population),
+  family = poisson(link = "log"),
+  data = poisson_ethnicity_imd_data
+)
+
+summary(model_interaction)  # Optional: view model summary
+
+model_results <- tidy(model_interaction, exponentiate = TRUE, conf.int = TRUE)
+
+# View interaction terms only
+interaction_terms <- model_results %>%
+  filter(grepl("ethnicity.*:imd_tertile", term))
+
+print(interaction_terms)
+
+# I want to try doing it by periods of 5y
+run_poisson_ethnicity_imd_interaction <- function(df) {
+  df <- df %>%
+    filter(
+      age_group %in% age_group[ave(n, age_group, FUN = sum) > 0],
+      ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]
+    )
+
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    message("Skipping model due to insufficient data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      imd_tertile = factor(imd_tertile, levels = c("Low deprivation", "Medium deprivation", "High deprivation")),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_tertile + age_group + sex,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+# Run it by 5y period and stroke type
+
+run_poisson_ethnicity_imd_interaction <- function(df) {
+  df <- df %>%
+    filter(
+      age_group %in% age_group[ave(n, age_group, FUN = sum) > 0],
+      ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]
+    )
+
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    message("Skipping model due to insufficient data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      imd_tertile = factor(imd_tertile, levels = c("Low deprivation", "Medium deprivation", "High deprivation")),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_tertile + age_group + sex,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period = unique(df$period)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+library(purrr)
+
+interaction_results_by_period <- poisson_ethnicity_imd_data %>%
+  group_by(period, stroke_class) %>%
+  group_split() %>%
+  map_dfr(run_poisson_ethnicity_imd_interaction)
+
+# Inspect
+interaction_terms_only <- interaction_results_by_period %>%
+  filter(grepl("ethnicity.*:imd_tertile", term))
+
+print(interaction_terms_only)
+
+## Very low counts, lets try by decade
+
+# creating decade variable stroke cases dataset
+stroke_cases_imd <- stroke_cases_imd %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+
+# Do the same in the population dataset
+population_period_age_ethnicity <- population_period_age_ethnicity %>%
+  mutate(period_decade = case_when(
+    period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+    period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+    period %in% c("2015-2019", "2020-2024") ~ "2015-2024"
+  ))
+# Filter and join as before but by period_decade
+poisson_ethnicity_imd_data_decade <- stroke_cases_imd %>%
+  filter(!ethnicity %in% c("Black Other", "Unknown")) %>%
+  left_join(population_period_age_ethnicity, 
+            by = c("period_decade", "ethnicity", "age_group")) %>%
+  filter(
+    !is.na(population),
+    !is.na(n),
+    age_group %in% valid_age_groups  # Already defined earlier
+  )
+# Fit the interaction model
+run_poisson_ethnicity_imd_interaction <- function(df) {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0])
+
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    message("Skipping: White not present or insufficient data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      imd_tertile = factor(imd_tertile, levels = c("Low deprivation", "Medium deprivation", "High deprivation")),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_tertile + age_group + sex,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period_decade = unique(df$period_decade)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+# Run the model
+model_results_interaction_decade <- poisson_ethnicity_imd_data_decade %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(run_poisson_ethnicity_imd_interaction)
+
+interaction_terms_decade <- model_results_interaction_decade %>%
+  filter(grepl("ethnicity.*:imd_tertile", term))
+
+# Lets check binary 
+slsr_clean_imd_groups <- slsr_clean_imd_groups %>%
+  mutate(imd_binary = case_when(
+    imd_tertile == "High deprivation" ~ "High deprivation",
+    imd_tertile %in% c("Medium deprivation", "Low deprivation") ~ "Low deprivation"
+  ))
+
+# Generate stroke case counts (including Total strokes)
+stroke_cases_imd_binary <- slsr_clean_imd_groups %>%
+  filter(!is.na(age_group), !is.na(imd_binary)) %>%
+  filter(stroke_class %in% c("Ischaemic", "PICH", "SAH")) %>%
+  group_by(period_decade, ethnicity, age_group, stroke_class, imd_binary) %>%
+  summarise(n = n(), .groups = "drop")
+
+stroke_cases_total <- stroke_cases_imd_binary %>%
+  group_by(period_decade, ethnicity, age_group, imd_binary) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(stroke_class = "Total strokes")
+
+stroke_cases_imd_binary <- bind_rows(stroke_cases_imd_binary, stroke_cases_total)
+
+#Merge with population 
+valid_age_groups <- c(
+  "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+  "50-54", "55-59", "60-64", "65-69", "70-74", "75+"
+)
+
+poisson_ethnicity_imd_binary <- stroke_cases_imd_binary %>%
+  filter(!ethnicity %in% c("Black Other", "Unknown")) %>%
+  left_join(population_period_age_ethnicity, by = c("period_decade" = "period_decade", "ethnicity", "age_group")) %>%
+  filter(!is.na(population), !is.na(n), age_group %in% valid_age_groups)
+
+# Define the poisson
+library(broom)
+library(purrr)
+
+run_poisson_interaction_model <- function(df) {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0])
+
+  if (!"White" %in% df$ethnicity || n_distinct(df$ethnicity) < 2 || sum(df$n) == 0) {
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = relevel(factor(ethnicity), ref = "White"),
+      imd_binary = relevel(factor(imd_binary), ref = "Low deprivation"),
+      age_group = factor(age_group)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_binary + age_group,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("ethnicity.*:imd_binary", term)) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period_decade = unique(df$period_decade)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", e$message)
+    return(tibble())
+  })
+}
+
+# Run model by group
+interaction_results_binary <- poisson_ethnicity_imd_binary %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(run_poisson_interaction_model)
+
+# View
+print(interaction_results_binary)
+
+write_xlsx(interaction_results_binary, "InteractionIMDDecade.xlsx")
+
+# Previous code was seeing interaction between ethnicity x deprivation vs White Low Deprivation
+# Now lets run a model within the same SES deprivation seeing if ethnicity differences still persist
+
+library(dplyr)
+library(broom)
+library(purrr)
+
+# 1. Split the binary IMD dataset by decade, stroke type, and IMD binary
+results_within_binary <- poisson_ethnicity_imd_binary %>%
+  group_by(period_decade, stroke_class, imd_binary) %>%
+  group_split()
+
+# 2. Define the Poisson model function (no sex)
+run_model_within_binary <- function(df) {
+  if (!"White" %in% df$ethnicity ||
+      sum(df$n) == 0 ||
+      n_distinct(df$ethnicity) < 2 ||
+      n_distinct(df$age_group) < 2) {
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      age_group = factor(age_group)
+    )
+
+  tryCatch({
+    model <- glm(
+      n ~ ethnicity + age_group,
+      offset = log(population),
+      family = poisson(link = "log"),
+      data = df
+    )
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("^ethnicity", term)) %>%
+      mutate(
+        reference_group = "White",
+        comparison_group = gsub("ethnicity", "", term),
+        imd_binary = unique(df$imd_binary),
+        stroke_class = unique(df$stroke_class),
+        period_decade = unique(df$period_decade)
+      ) %>%
+      select(period_decade, imd_binary, stroke_class, reference_group,
+             comparison_group, estimate, conf.low, conf.high, p.value)
+
+  }, error = function(e) {
+    message("Skipping subset due to error: ", conditionMessage(e))
+    return(tibble())
+  })
+}
+
+# 3. Run the model for each subset
+ethnicity_within_binary_results <- results_within_binary %>%
+  map_dfr(run_model_within_binary)
+
+# 4. Format the results nicely
+ethnicity_within_binary_results_fmt <- ethnicity_within_binary_results %>%
+  mutate(
+    change = case_when(
+      p.value < 0.05 & estimate > 1 ~ "↑",
+      p.value < 0.05 & estimate < 1 ~ "↓",
+      TRUE ~ "↔"
+    ),
+    p_formatted = ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3, format = "f")),
+    IRR_label = paste0(
+      round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+      "), p=", p_formatted
+    )
+  )
+
+write_xlsx(ethnicity_within_binary_results_fmt, "StratifiedAnalysisIMD.xlsx")
+
+# Plotting these
+# Custom colors matching previous figures
+ethnicity_colors <- c(
+  "Black African" = "#e64173",      # Pinkish-red
+  "Black Caribbean" = "#7b3294",    # Purple
+  "Other" = "#fdae61"               # Orange/yellow
+)
+
+library(ggplot2)
+library(dplyr)
+
+plot_stratified_irr <- function(df, stroke_type, deprivation_level) {
+  df %>%
+    filter(stroke_class == stroke_type, imd_binary == deprivation_level) %>%
+    mutate(
+      comparison_group = factor(
+        comparison_group,
+        levels = rev(c("Black African", "Black Caribbean", "Other"))
+      ),
+      period_decade = factor(period_decade, levels = c("1995-2004", "2005-2014", "2015-2024"))
+    ) %>%
+    ggplot(aes(x = estimate, y = comparison_group, color = comparison_group)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    facet_wrap(~ period_decade, ncol = 3) +
+    scale_color_manual(values = ethnicity_colors) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray40") +
+    labs(
+      title = paste("IRRs by Ethnicity (", deprivation_level, " areas)", sep = ""),
+      subtitle = paste("Stroke subtype:", stroke_type, "— Adjusted for age"),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Ethnicity",
+      color = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "none"
+    )
+}
+
+# Usage
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "Total strokes", "High deprivation")
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "Total strokes", "Low deprivation")
+
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "Ischaemic", "High deprivation")
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "Ischaemic", "Low deprivation")
+
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "PICH", "High deprivation")
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "PICH", "Low deprivation")
+
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "SAH", "High deprivation")
+plot_stratified_irr(ethnicity_within_binary_results_fmt, "SAH", "Low deprivation")
+
+# Save them
+# Define combinations
+stroke_types <- c("Total strokes", "Ischaemic", "PICH", "SAH")
+imd_levels <- c("High deprivation", "Low deprivation")
+
+# Loop through combinations
+for (stroke in stroke_types) {
+  for (imd in imd_levels) {
+    p <- plot_stratified_irr(ethnicity_within_binary_results_fmt, stroke, imd)
+
+    # Create filename
+    file_name <- paste0("IRR_", gsub(" ", "", stroke), "_", gsub(" ", "", imd), ".png")
+
+    # Save the plot
+    ggsave(
+      filename = file_name,
+      plot = p,
+      width = 11,
+      height = 6,
+      dpi = 300,
+      bg = "white"
+    )
+  }
+}
+
+## Exploring the margins
+model_margins <- glm(
+  n ~ ethnicity * imd_binary + age_group,
+  offset = log(population),
+  family = poisson(link = "log"),
+  data = poisson_ethnicity_imd_binary
+)
+
+install (emmeans)
+library(emmeans)
+
+# Get predicted rates per group on the response (rate) scale
+margins_ethnicity_imd <- emmeans(model_margins, ~ ethnicity * imd_binary, type = "response")
+margins_df <- as.data.frame(margins_ethnicity_imd)
+
+# Getting the margins adjusted to 100000
+# Create a working dataset and scale population
+df <- poisson_ethnicity_imd_binary %>%
+  mutate(population_scaled = population / 100000)
+
+model_scaled <- glm(
+  n ~ ethnicity * imd_binary + age_group,
+  offset = log(population_scaled),
+  family = poisson(link = "log"),
+  data = df
+)
+
+library(emmeans)
+
+margins_scaled <- emmeans(model_scaled, ~ ethnicity * imd_binary, type = "response")
+margins_df <- as.data.frame(margins_scaled)
+
+# Let's age-standarise them anyway and divide them by decade #
+
+library(dplyr)
+library(broom)
+library(emmeans)
+library(purrr)
+
+# European Standard Population (ESP)
+esp <- tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75+"),
+  std_pop = c(6000, 6000, 6500, 7000, 7000, 7000,
+              7000, 6500, 6000, 5500, 5000, 9000)
+) %>%
+  mutate(std_prop = std_pop / sum(std_pop))  # Proportion weights
+
+compute_age_standardised_margins <- function(df) {
+  df <- df %>%
+    mutate(
+      ethnicity = factor(ethnicity),
+      ethnicity = relevel(ethnicity, ref = "White"),
+      imd_binary = factor(imd_binary, levels = c("Low deprivation", "High deprivation")),
+      age_group = factor(age_group, levels = esp$age_group),
+      population_scaled = population / 100000
+    )
+
+  model <- glm(n ~ ethnicity * imd_binary + age_group,
+               offset = log(population_scaled),
+               family = poisson(link = "log"),
+               data = df)
+
+  # Store stroke_class and period_decade before summarising
+  stroke_class_val <- unique(df$stroke_class)
+  period_val <- unique(df$period_decade)
+
+  # Marginal means
+  em <- emmeans(model, ~ ethnicity * imd_binary * age_group, type = "response") %>%
+    as_tibble()
+
+  em_std <- em %>%
+    left_join(esp, by = "age_group") %>%
+    group_by(ethnicity, imd_binary) %>%
+    summarise(
+      std_rate = sum(rate * std_prop),
+      std_LCL = sum(asymp.LCL * std_prop),
+      std_UCL = sum(asymp.UCL * std_prop),
+      stroke_class = stroke_class_val,
+      period_decade = period_val,
+      .groups = "drop"
+    )
+
+  return(em_std)
+}
+
+
+# Run by decade × stroke type
+standardised_results <- poisson_ethnicity_imd_binary %>%
+  group_by(stroke_class, period_decade) %>%
+  group_split() %>%
+  map_dfr(compute_age_standardised_margins)
+
+write_xlsx(standardised_results, "margins_differences.xlsx")
+
+# Plotting them
+library(ggplot2)
+
+# Filter by stroke class
+stroke_to_plot <- "Ischaemic"  # Change to "PICH", "SAH", or "Total strokes"
+
+data_filtered <- standardised_results %>%
+  filter(stroke_class == stroke_to_plot)
+
+ggplot(data_filtered, aes(x = ethnicity, y = std_rate, fill = imd_binary)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(
+    aes(ymin = std_LCL, ymax = std_UCL),
+    position = position_dodge(width = 0.7),
+    width = 0.2
+  ) +
+  facet_wrap(~ period_decade) +
+  labs(
+    title = paste("Age-Standardised Stroke Rates by Ethnicity and Deprivation"),
+    subtitle = stroke_to_plot,
+    x = "Ethnicity",
+    y = "Rate per 100,000",
+    fill = "Deprivation Level"
+  ) +
+  scale_fill_manual(values = c("Low deprivation" = "#2b8cbe", "High deprivation" = "#de2d26")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+# Adding this for PICH and SAH
+library(ggplot2)
+
+# Filter by stroke class
+stroke_to_plot <- "PICH"  # Change to "PICH", "SAH", or "Total strokes"
+
+data_filtered <- standardised_results %>%
+  filter(stroke_class == stroke_to_plot)
+
+ggplot(data_filtered, aes(x = ethnicity, y = std_rate, fill = imd_binary)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(
+    aes(ymin = std_LCL, ymax = std_UCL),
+    position = position_dodge(width = 0.7),
+    width = 0.2
+  ) +
+  facet_wrap(~ period_decade) +
+  labs(
+    title = paste("Age-Standardised Stroke Rates by Ethnicity and Deprivation"),
+    subtitle = stroke_to_plot,
+    x = "Ethnicity",
+    y = "Rate per 100,000",
+    fill = "Deprivation Level"
+  ) +
+  scale_fill_manual(values = c("Low deprivation" = "#2b8cbe", "High deprivation" = "#de2d26")) +
+  coord_cartesian(ylim = c(0, 20)) +  # 👈 Add it right here
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+ggsave(paste0("ASIR_plot_", stroke_to_plot, ".png"), width = 10, height = 6, dpi = 300)
 
 
