@@ -7,6 +7,42 @@ library(tidyr)
 # Load the data
 df_1991 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/1991.tsv")
 
+# Load necessary libraries
+library(dplyr)
+
+# Manually create a data frame with wards and IMD scores based on the 2000 IMD release
+imd_lookup <- tribble(
+  ~ward,            ~borough,    ~imd_score,
+  "Cathedral",      "Southwark", 50.47,
+  "Chaucer",        "Southwark", 54.66,
+  "Bricklayers",    "Southwark", 39.69,
+  "Riverside",      "Southwark", 36.77,
+  "Rotherhithe",    "Southwark", 55.47,
+  "Dockyard",       "Southwark", 30.16,
+  "Browning",       "Southwark", 50.21,
+  "Burgess",        "Southwark", 51.78,
+  "Newington",      "Southwark", 47.38,
+  "Faraday",        "Southwark", 49.69,
+  "St Giles",       "Southwark", 51.11,
+  "Brunswick",      "Southwark", 57.56,
+  
+  "Bishop's",       "Lambeth",   42.85,
+  "Town Hall",      "Lambeth",   38.33,
+  "Streatham Hill", "Lambeth",   32.12,
+  "Clapham Park",   "Lambeth",   25.34,
+  "Clapham Town",   "Lambeth",   33.42,
+  "Angell",         "Lambeth",   53.28,
+  "Herne Hill",     "Lambeth",   34.94,
+  "Ferndale",       "Lambeth",   42.43,
+  "Larkhall",       "Lambeth",   43.05,
+  "Oval",           "Lambeth",   40.30,
+  "Prince's",       "Lambeth",   41.22,
+  "Stockwell",      "Lambeth",   42.85,
+  "Thornton",       "Lambeth",   24.71,
+  "Tulse Hill",     "Lambeth",   41.49,
+  "Vassall",        "Lambeth",   52.86
+)
+
 # Extracting age group
 library(stringr)
 library(dplyr)
@@ -50,9 +86,25 @@ df_1991_filtered <- df_1991_filtered %>%
     )
   )
 
+# Adding the IMD
+df_1991_filtered <- df_1991_filtered %>%
+  mutate(
+    ward_clean = str_remove(`1991 frozen ward`, "^.*?\\s"),  # remove everything up to the first space
+    ward_clean = str_trim(ward_clean)
+  )
+
+df_1991_joined <- df_1991_filtered %>%
+  left_join(imd_lookup, by = c("ward_clean" = "ward"))
+
+df_1991_joined <- df_1991_joined %>%
+  mutate(
+    imd_score = str_replace(imd_score, ",", "."),   # Convert "49,68" → "49.68"
+    imd_score = as.numeric(imd_score)               # Make it numeric
+  )
+
 # Summarise
-summary_1991 <- df_1991_filtered %>%
-  group_by(Sex, Ethnicity, `Age Range`) %>%
+summary_1991 <- f_1991_joined %>%
+  group_by(Sex, Ethnicity, `Age Range`, imd_score) %>%
   summarise(
     Total = sum(value, na.rm = TRUE),
     .groups = "drop"
