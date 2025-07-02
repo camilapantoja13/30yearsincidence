@@ -120,76 +120,98 @@ summary_ethnicity_age <- summary_1991 %>%
     .groups = "drop"
   )
 
+summary_ethnicity_age_imd <- summary_1991 %>%
+  group_by(Ethnicity, `Age Range`, imd_score) %>%
+  summarise(
+    Total = sum(Total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Summary for female and male including IMD
 summary_female <- summary_1991 %>%
   filter(Sex == "Female")
 
 summary_male <- summary_1991 %>%
   filter(Sex == "Male")
 
-# Export
+# Creating a long format version with IMD (for interpolation etc.)
+summary_long <- summary_1991 %>%
+  mutate(Year = 1991) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, imd_score, Total)
+
+# Save it
 write_xlsx(
   list(
-    Total = summary_ethnicity_age,
     Female = summary_female,
     Male = summary_male
   ),
-  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_by_sex_ethnicity_age.xlsx"
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_by_sex_ethnicity_age_imd.xlsx"
 )
 
-# Creating a long format one
-summary_long <- summary_1991 %>%
-  mutate(Year = 1991) %>%
-  select(Year, Sex, Ethnicity, `Age Range`, Total)
+write_csv(
+  summary_long,
+  "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_long_with_imd.csv"
+)
 
-# Save
-write_csv(summary_long, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/1991_summary_long.csv")
 
 # === Cleaning 2001 Census ===
 library(readr)
 library(dplyr)
 library(stringr)
 library(tidyr)
-
-
 library(readxl)
 
-# Load the Excel version of 2001 census data
-df_2001 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2001.xlsx")
+# Load the 2001 dataset (TSV)
+df_2001 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2001.tsv")
 
-# Step 1: Filter out totals (like "All categories: Age")
-df_2001_filtered <- df_2001 %>%
-  filter(!str_detect(Age, "All categories"))
-
-df_2001_filtered <- df_2001 %>%
+# Rename columns
+df_2001_clean <- df_2001 %>%
+  rename(
+    Ethnicity_raw = `Ethnic Grou`,    # or "Ethnic Group" if that's the actual name
+    Ward = `2003 ST ward`
+  ) %>%
   filter(
-    !str_detect(Age, "All categories"),  # remove age totals
-    !str_detect(`Ethnic Group`, "All categories")  # remove ethnic group totals
+    !str_detect(Age, "All categories"),
+    !str_detect(Ethnicity_raw, "All categories")
   )
-# Step 2: Extract and clean Age Range
-df_2001_filtered <- df_2001_filtered %>%
+
+# Age Range
+df_2001_clean <- df_2001_clean %>%
   mutate(
     `Age Range` = str_extract(Age, "\\d{1,2}\\s+to\\s+\\d{1,2}|\\d{1,2}"),
     `Age Range` = str_replace_all(`Age Range`, " to ", "-"),
     `Age Range` = ifelse(str_detect(Age, "90 and over|85 to 89"), "85+", `Age Range`)
   )
 
-library(writexl)
-
-# Summarise into 3 tables
-summary_ethnicity_age_2001 <- summary_2001 %>%
-  group_by(Ethnicity, `Age Range`) %>%
-  summarise(
-    Total = sum(Total, na.rm = TRUE),
-    .groups = "drop"
+# Ethnicity
+df_2001_clean <- df_2001_clean %>%
+  mutate(
+    Ethnicity = case_when(
+      str_detect(Ethnicity_raw, "White") ~ "White",
+      str_detect(Ethnicity_raw, regex("Black.*African", ignore_case = TRUE)) ~ "Black African",
+      str_detect(Ethnicity_raw, regex("Black.*Caribbean", ignore_case = TRUE)) ~ "Black Caribbean",
+      str_detect(Ethnicity_raw, regex("Black.*Other", ignore_case = TRUE)) ~ "Black Other",
+      TRUE ~ "Other"
+    )
   )
 
-summary_female_2001 <- summary_2001 %>%
-  filter(Sex == "Females")
+# (Im doing this after doing 2011, so this following step is already created)
+df_2001_joined <- df_2001_clean %>%
+  left_join(imd_by_ward, by = c("Ward_Clean" = "Ward_Name"))
 
-summary_male_2001 <- summary_2001 %>%
-  filter(Sex == "Males")
 
-# Export to Excel with 3 tabs
+# Summarise counts by demographics and IMD
+summary_2001 <- df_2001_joined %>%
+  group_by(Sex, Ethnicity, `Age Range`, IMD_score) %>%
+  summarise(Total = sum(value, na.rm = TRUE), .groups = "drop")
+
+summary_ethnicity_age_2001 <- summary_2001 %>%
+  group_by(Ethnicity, `Age Range`, IMD_score) %>%
+  summarise(Total = sum(Total), .groups = "drop")
+
+summary_female_2001 <- summary_2001 %>% filter(Sex == "Female")
+summary_male_2001 <- summary_2001 %>% filter(Sex == "Male")
+
 write_xlsx(
   list(
     Total = summary_ethnicity_age_2001,
@@ -199,27 +221,58 @@ write_xlsx(
   path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2001_summary_by_sex_ethnicity_age.xlsx"
 )
 
-# Long format export
 summary_long_2001 <- summary_2001 %>%
+  mutate(Year = 2001) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
 
-# Save
-write_csv(summary_long_2001, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2001_summary_long.csv")
+write_csv(summary_long_2001,
+          "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2001_summary_long.csv")
+
 
 # === Cleaning 2011 Census ===
 library(readxl)
 
-# Import the file
-df_2011 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2011.xlsx")
+df_2011 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2011.tsv") 
+
+# Also import Lower_Layer_Super_Output_Area_(2001)_to_Ward_(2010)_Lookup_in_England_and_Wales and imd2010adj_2015
+
+# First, we need to match the IMD with the wards as the information is by LSOA
+
+# Assign the long name to a shorter variable
+lookup <- `Lower_Layer_Super_Output_Area_(2001)_to_Ward_(2010)_Lookup_in_England_and_Wales`
+imd <- imd2010adj_2015
+
+library(dplyr)
+
+# Get average IMD per ward from the IMD dataset using lookup
+imd_by_ward <- lookup %>%
+  select(Ward_Name, LSOA_code) %>%
+  left_join(imd, by = "LSOA_code") %>%
+  group_by(Ward_Name) %>%
+  summarise(IMD_score = mean(IMD_score, na.rm = TRUE), .groups = "drop")
+
+#  Step 2: Clean ward name in df_2011 
+df_2011 <- df_2011 %>%
+  mutate(
+    Ward_Clean = str_extract(`2011 census merged ward`, "^[^\\[]+"),  # Remove [suffix]
+    Ward_Clean = str_trim(Ward_Clean)
+  )
+
+# Step 3: Join df_2011 with lookup using ward names
+df_2011_with_imd <- df_2011 %>%
+  mutate(Ward_Clean = str_trim(str_extract(`2011 census merged ward`, "(?<=: ).*"))) %>%
+  left_join(imd_by_ward, by = c("Ward_Clean" = "Ward_Name"))
+
 
 # Filter out the totals
 # Step 1: Filter out totals
-df_2011_filtered <- df_2011 %>%
+df_2011_filtered <- df_2011_with_imd %>%
   filter(
     !str_detect(Age, "All categories"),  # remove age totals
     !str_detect(`Ethnic Grou`, "All categories")  # remove ethnicity totals
   )
 
-# Step 2: Clean Age Range
+# Step 2: Extract and clean Age Range
 df_2011_filtered <- df_2011_filtered %>%
   mutate(
     `Age Range` = str_extract(Age, "\\d{1,2}\\s+to\\s+\\d{1,2}|\\d{1,2}"),
@@ -227,7 +280,7 @@ df_2011_filtered <- df_2011_filtered %>%
     `Age Range` = ifelse(str_detect(Age, "90 and over|85 to 89"), "85+", `Age Range`)
   )
 
-# Step 3: Recode Ethnicity using 2011 structure
+# Step 3: Recode Ethnicity
 df_2011_filtered <- df_2011_filtered %>%
   mutate(
     Ethnicity = case_when(
@@ -239,7 +292,7 @@ df_2011_filtered <- df_2011_filtered %>%
     )
   )
 
-# Step 4: Standardise Sex
+# Step 4: Recode Sex
 df_2011_filtered <- df_2011_filtered %>%
   mutate(
     Sex = case_when(
@@ -249,19 +302,20 @@ df_2011_filtered <- df_2011_filtered %>%
     )
   )
 
-# Step 5: Summarise
+# ✅ Step 5: Summarise including IMD
 summary_2011 <- df_2011_filtered %>%
-  group_by(Sex, Ethnicity, `Age Range`) %>%
+  group_by(Sex, Ethnicity, `Age Range`, IMD_score) %>%
   summarise(Total = sum(value, na.rm = TRUE), .groups = "drop")
 
-# Export Excel (3 sheets)
+# Sub-tables
 summary_ethnicity_age_2011 <- summary_2011 %>%
-  group_by(Ethnicity, `Age Range`) %>%
+  group_by(Ethnicity, `Age Range`, IMD_score) %>%
   summarise(Total = sum(Total), .groups = "drop")
 
 summary_female_2011 <- summary_2011 %>% filter(Sex == "Female")
 summary_male_2011 <- summary_2011 %>% filter(Sex == "Male")
 
+# Export to Excel
 write_xlsx(
   list(
     Total = summary_ethnicity_age_2011,
@@ -271,30 +325,47 @@ write_xlsx(
   path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2011_summary_by_sex_ethnicity_age.xlsx"
 )
 
-# Long-format for interpolation
+# Long format for interpolation or modeling
 summary_long_2011 <- summary_2011 %>%
   mutate(Year = 2011) %>%
-  select(Year, Sex, Ethnicity, `Age Range`, Total)
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
 
-write_csv(summary_long_2011, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2011_summary_long.csv")
+write_csv(summary_long_2011,
+          "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/2011_summary_long.csv")
 
 # === Cleaning 2021 Census ===
-
-library(readxl)
-excel_sheets("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx")
-df_2021 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx", sheet = 1)
-glimpse(df_2021)
 
 library(readxl)
 library(dplyr)
 library(stringr)
 library(tidyr)
+library(readr)
 
-# Load the data
+# Load census and IMD datasets
 df_2021 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx")
 
-# Step 1: Clean column names
-names(df_2021) <- make.names(names(df_2021))  # standardize column names
+IMD2019 <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD calculations/IMD2019.xlsx")
+
+# Ward names
+IMD2019 <- IMD2019 %>%
+  rename(
+    Ward_Name = 2,                    # 2nd column is ward name
+    IMD_score = `IMD average score`
+  )
+
+# Step 3: Clean and standardise column names
+names(df_2021) <- make.names(names(df_2021))  # For safe use in code
+
+# Step 4: Add cleaned ward name to match IMD
+df_2021 <- df_2021 %>%
+  mutate(
+    Ward_Clean = str_trim(Electoral.wards.and.divisions)
+  )
+
+# Step 5: Join IMD scores
+df_2021 <- df_2021 %>%
+  left_join(imd_2019, by = c("Ward_Clean" = "Ward_Name"))
+
 
 # Step 2: Create Age Ranges
 df_2021 <- df_2021 %>%
@@ -345,13 +416,34 @@ df_2021 <- df_2021 %>%
     )
   )
 
-# Step 5: Summarise
+# Step 9: Summarise
 summary_2021 <- df_2021 %>%
   filter(!is.na(`Age Range`)) %>%
-  group_by(Sex, Ethnicity, `Age Range`) %>%
+  group_by(Sex, Ethnicity, `Age Range`, IMD_score) %>%
   summarise(Total = sum(Observation, na.rm = TRUE), .groups = "drop") %>%
   mutate(Year = 2021) %>%
-  select(Year, Sex, Ethnicity, `Age Range`, Total)
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
+
+library(writexl)
+library(readr)
+
+# Excel export (all summaries in one file)
+write_xlsx(
+  list(
+    Summary_1991 = summary_1991,
+    Summary_2001 = summary_2001,
+    Summary_2011 = summary_2011,
+    Summary_2021 = summary_2021
+  ),
+  path = "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/census_summaries_by_year.xlsx"
+)
+
+# Optional: Export individual CSV files
+write_csv(summary_1991, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/summary_1991.csv")
+write_csv(summary_2001, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/summary_2001.csv")
+write_csv(summary_2011, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/summary_2011.csv")
+write_csv(summary_2021, "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/summary_2021.csv")
+
 
 # === Interpolate and extrapolate ===
 summary_long_1991  # from 1991
@@ -458,6 +550,48 @@ combined_totals <- summary_interpolated %>%
   summarise(Total_Population = sum(Total_interp, na.rm = TRUE), .groups = "drop")
 
 # === Fix extrapolation ===
+# Defining a function to assign IMD period
+assign_imd_period <- function(year) {
+  case_when(
+    year >= 1991 & year <= 2000 ~ 1991,
+    year >= 2001 & year <= 2010 ~ 2001,
+    year >= 2011 & year <= 2018 ~ 2011,
+    year >= 2019               ~ 2021
+  )
+}
+
+# Name all the columns the same
+# 1991
+summary_1991 <- summary_1991 %>%
+  mutate(Year = 1991) %>%
+  rename(IMD_score = imd_score) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
+
+# 2001
+summary_2001 <- summary_2001 %>%
+  mutate(Year = 2001) %>%
+  rename(IMD_score = IMD_score) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
+
+# 2011
+summary_2011 <- summary_2011 %>%
+  mutate(Year = 2011) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
+
+# 2021 (already OK)
+summary_2021 <- summary_2021 %>%
+  mutate(Year = 2021) %>%
+  select(Year, Sex, Ethnicity, `Age Range`, IMD_score, Total)
+
+# Join them all
+summary_all_years <- bind_rows(
+  summary_1991,
+  summary_2001,
+  summary_2011,
+  summary_2021
+)
+
+## Im going to use my already known population, which I created like this: 
 library(dplyr)
 library(tidyr)
 library(purrr)
@@ -577,4 +711,86 @@ write_csv(
   file.path(save_path, "population_by_age_ethnicity_sex.csv")
 )
 
+## For including the IMD, nstead of duplicating the Total, I'm calculating proportions of population in each IMD score group using census data, 
+then allocate Total accordingly.
+
+# 1991
+prop_1991 <- summary_1991 %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  mutate(prop = Total / sum(Total)) %>%
+  select(Sex, Ethnicity, `Age Range`, IMD_score, prop)
+
+pop_with_imd <- pop_interp %>%
+  mutate(IMD_period = as.character(IMD_period)) %>%
+  left_join(
+    prop_1991 %>% mutate(IMD_period = "1991"),
+    by = c("Sex", "Ethnicity", "Age Range" = "Age Range", "IMD_period")
+  ) %>%
+  mutate(Total_adjusted = Total * prop)
+
+# 2001
+prop_2001 <- summary_2001 %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  mutate(prop = Total / sum(Total)) %>%
+  select(Sex, Ethnicity, `Age Range`, IMD_score, prop)
+
+pop_with_imd <- pop_interp %>%
+  mutate(IMD_period = as.character(IMD_period)) %>%
+  left_join(
+    prop_2001 %>% mutate(IMD_period = "2001"),
+    by = c("Sex", "Ethnicity", "Age Range" = "Age Range", "IMD_period")
+  ) %>%
+  mutate(Total_adjusted = Total * prop)
+
+# 2011
+prop_2011 <- summary_2011 %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  mutate(prop = Total / sum(Total)) %>%
+  select(Sex, Ethnicity, `Age Range`, IMD_score, prop)
+
+pop_with_imd <- pop_interp %>%
+  mutate(IMD_period = as.character(IMD_period)) %>%
+  left_join(
+    prop_2011 %>% mutate(IMD_period = "2011"),
+    by = c("Sex", "Ethnicity", "Age Range" = "Age Range", "IMD_period")
+  ) %>%
+  mutate(Total_adjusted = Total * prop)
+
+# 2021
+prop_2021 <- summary_2021 %>%
+  group_by(Sex, Ethnicity, `Age Range`) %>%
+  mutate(prop = Total / sum(Total)) %>%
+  select(Sex, Ethnicity, `Age Range`, IMD_score, prop)
+
+pop_with_imd <- pop_interp %>%
+  mutate(IMD_period = as.character(IMD_period)) %>%
+  left_join(
+    prop_2021 %>% mutate(IMD_period = "2021"),
+    by = c("Sex", "Ethnicity", "Age Range" = "Age Range", "IMD_period")
+  ) %>%
+  mutate(Total_adjusted = Total * prop)
+
+imd_ref <- bind_rows(
+  prop_1991 %>% mutate(IMD_period = "1991"),
+  prop_2001 %>% mutate(IMD_period = "2001"),
+  prop_2011 %>% mutate(IMD_period = "2011"),
+  prop_2021 %>% mutate(IMD_period = "2021")
+)
+
+pop_interp <- pop_interp %>%
+  rename(`Age Range` = `Age Range`) %>%  # to match names
+  mutate(IMD_period = case_when(
+    Year >= 1991 & Year <= 2000 ~ "1991",
+    Year >= 2001 & Year <= 2010 ~ "2001",
+    Year >= 2011 & Year <= 2020 ~ "2011",
+    Year >= 2021 ~ "2021"
+  ))
+
+pop_with_imd <- pop_interp %>%
+  left_join(imd_ref, by = c("Sex", "Ethnicity", "Age Range", "IMD_period")) %>%
+  mutate(Total_adjusted = Total * prop)
+
+
+library(writexl)
+write_xlsx(pop_with_imd, path = "pop_with_imd.xlsx")
 
