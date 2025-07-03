@@ -1861,7 +1861,411 @@ ggsave("aIRR_by_EthnicityandDecade_SAHStrokes.png",
 # Let's keep doing it with 5-year groups
 # Interaction terms and marginal effects
 # ------------------------------------------------------------------
-#Interaction models and margins
+pop_with_imd <- read_excel("pop_with_imd.xlsx")
+
+# First ensure imd_tertile exists in pop_with_imd (create it based on IMD_score)
+pop_with_imd <- pop_with_imd %>%
+  mutate(
+    imd_tertile = case_when(
+      IMD_score <= quantile(IMD_score, 1/3, na.rm = TRUE) ~ "High deprivation",
+      IMD_score <= quantile(IMD_score, 2/3, na.rm = TRUE) ~ "Medium deprivation",
+      TRUE ~ "Low deprivation"
+    )
+  )
+
+pop_with_imd <- pop_with_imd %>%
+  filter(Year >= 1995)
+
+
+# Add decade period to match the case data
+pop_with_imd <- pop_with_imd %>%
+  mutate(
+    period_decade = case_when(
+      Year %in% 1995:2004 ~ "1995-2004",
+      Year %in% 2005:2014 ~ "2005-2014",
+      Year %in% 2015:2024 ~ "2015-2024"
+    )
+  )
+
+# Group by the same fields as your stroke cases
+pop_agg <- pop_with_imd %>%
+  filter(`Age Range` %in% valid_age_groups) %>%
+  group_by(period_decade, ethnicity = Ethnicity, age_group = `Age Range`, sex = Sex, imd_tertile) %>%
+  summarise(population = sum(Total_adjusted, na.rm = TRUE), .groups = "drop")
+
+# Create the stroke cases by decade
+stroke_cases_decade <- slsr_clean_imd_groups %>%
+  mutate(
+    period_decade = case_when(
+      strk_y %in% 1995:2004 ~ "1995-2004",
+      strk_y %in% 2005:2014 ~ "2005-2014",
+      strk_y %in% 2015:2024 ~ "2015-2024"
+    )
+  ) %>%
+  filter(
+    stroke_class %in% c("Ischaemic", "PICH", "SAH"),
+    !ethnicity %in% c("Unknown", "Black Other"),
+    !is.na(imd_tertile), !is.na(sex), !is.na(age_group)
+  ) %>%
+  group_by(period_decade, ethnicity, age_group, sex, imd_tertile, stroke_class) %>%
+  summarise(n = n(), .groups = "drop")
+
+stroke_cases_decade <- stroke_cases_decade %>%
+  mutate(sex = case_when(
+    sex == 1 ~ "Female",
+    sex == 2 ~ "Male",
+    TRUE ~ NA_character_
+  ))
+# Join
+model_data <- stroke_cases_decade %>%
+  left_join(pop_agg, by = c("period_decade", "ethnicity", "age_group", "sex", "imd_tertile")) %>%
+  filter(!is.na(population), !is.na(n))
+
+# Run the interaction model
+run_updated_interaction_model <- function(df) {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]) %>%
+    filter(imd_tertile %in% imd_tertile[ave(n, imd_tertile, FUN = sum) > 0]) %>%
+    filter(sex %in% sex[ave(n, sex, FUN = sum) > 0])
+
+  if (
+    n_distinct(df$ethnicity) < 2 ||
+    n_distinct(df$imd_tertile) < 2 ||
+    n_distinct(df$sex) < 2 ||
+    sum(df$n, na.rm = TRUE) == 0
+  ) {
+    message("Skipping: Not enough factor levels or data")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = relevel(factor(ethnicity), ref = "White"),
+      imd_tertile = factor(imd_tertile, levels = c("Low deprivation", "Medium deprivation", "High deprivation")),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_tertile + age_group + sex,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period_decade = unique(df$period_decade)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", e$message)
+    return(tibble())
+  })
+}
+
+
+# Apply to all
+library(purrr)
+
+interaction_results_final <- model_data %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(run_updated_interaction_model)
+
+interaction_results_final %>%
+  filter(grepl("ethnicity.*:imd_tertile", term)) %>%
+  View()
+
+# There are many groups that keep unmatched, so lets try a binary IMD
+
+# For stroke cases
+stroke_cases_binary <- stroke_cases_decade %>%
+  mutate(imd_binary = case_when(
+    imd_tertile == "High deprivation" ~ "High deprivation",
+    imd_tertile %in% c("Medium deprivation", "Low deprivation") ~ "Low deprivation"
+  ))
+
+# For population data
+pop_binary <- pop_with_imd %>%
+  filter(Year >= 1995) %>%
+  mutate(
+    age_group = `Age Range`,
+    period_decade = case_when(
+      Year %in% 1995:2004 ~ "1995-2004",
+      Year %in% 2005:2014 ~ "2005-2014",
+      Year %in% 2015:2024 ~ "2015-2024"
+    ),
+    imd_binary = case_when(
+      imd_tertile == "High deprivation" ~ "High deprivation",
+      imd_tertile %in% c("Medium deprivation", "Low deprivation") ~ "Low deprivation"
+    )
+  ) %>%
+  group_by(period_decade, ethnicity = Ethnicity, age_group, sex = Sex, imd_binary) %>%
+  summarise(population = sum(Total_adjusted, na.rm = TRUE), .groups = "drop")
+
+# Join
+model_data_binary <- stroke_cases_binary %>%
+  mutate(sex = as.character(sex)) %>%
+  left_join(pop_binary, by = c("period_decade", "ethnicity", "age_group", "sex", "imd_binary")) %>%
+  filter(!is.na(population), !is.na(n))
+
+# Define function
+run_poisson_binary_interaction <- function(df) {
+  df <- df %>%
+    filter(age_group %in% age_group[ave(n, age_group, FUN = sum) > 0]) %>%
+    filter(ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0])
+
+  if (
+    n_distinct(df$ethnicity) < 2 ||
+    n_distinct(df$imd_binary) < 2 ||
+    sum(df$n) == 0
+  ) {
+    message("Skipping: Insufficient data or factor levels")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = relevel(factor(ethnicity), ref = "White"),
+      imd_binary = relevel(factor(imd_binary), ref = "Low deprivation"),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(n ~ ethnicity * imd_binary + age_group + sex,
+                 offset = log(population),
+                 family = poisson(link = "log"),
+                 data = df)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("ethnicity.*:imd_binary", term)) %>%
+      mutate(
+        stroke_class = unique(df$stroke_class),
+        period_decade = unique(df$period_decade)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", e$message)
+    return(tibble())
+  })
+}
+
+# And run...
+library(purrr)
+
+interaction_results_binary <- model_data_binary %>%
+  group_by(period_decade, stroke_class) %>%
+  group_split() %>%
+  map_dfr(run_poisson_binary_interaction)
+
+# Its much better the previous model by tertiles
+write_xlsx(interaction_results_final, "InteractionIMDtertilesDecade.xlsx")
+
+# Clean code for IMD tertiles
+library(dplyr)
+library(gt)
+
+# Format interaction results for table
+table_ready <- interaction_results_final %>%
+  filter(grepl("ethnicity.*:imd_tertile", term)) %>%
+  mutate(
+    IRR = round(estimate, 2),
+    CI = paste0("(", round(conf.low, 2), "–", round(conf.high, 2), ")"),
+    `p-value` = case_when(
+      p.value < 0.001 ~ "<0.001",
+      TRUE ~ formatC(p.value, format = "f", digits = 3)
+    )
+  ) %>%
+  select(period_decade, stroke_class, term, IRR, CI, `p-value`) %>%
+  rename(
+    Period = period_decade,
+    `Stroke type` = stroke_class,
+    `Interaction term` = term
+  )
+
+# Now not sure, maybe better by binary
+# Clean code for IMD tertiles
+library(dplyr)
+library(gt)
+
+# Format interaction results for table
+interaction_results_binary_clean <- interaction_results_binary %>%
+  mutate(
+    IRR = round(estimate, 2),
+    CI = paste0("(", round(conf.low, 2), "–", round(conf.high, 2), ")"),
+    `p-value` = case_when(
+      is.na(p.value) ~ "NA",
+      p.value < 0.001 ~ "<0.001",
+      TRUE ~ formatC(p.value, format = "f", digits = 3)
+    )
+  ) %>%
+  select(
+    Period = period_decade,
+    `Stroke type` = stroke_class,
+    `Interaction term` = term,
+    IRR,
+    CI,
+    `p-value`
+  )
+
+write_xlsx(interaction_results_binary_clean, "InteractionIMDbinaryDecade.xlsx")
+
+# Create interaction for total strokes
+# Collapse all stroke subtypes into total strokes
+stroke_cases_total <- stroke_cases_binary %>%
+  group_by(period_decade, ethnicity, age_group, sex, imd_binary) %>%
+  summarise(n = sum(n, na.rm = TRUE), .groups = "drop") %>%
+  mutate(stroke_class = "Total")  # Add dummy label to keep consistent with original structure
+
+model_data_binary_total <- stroke_cases_total %>%
+  mutate(sex = as.character(sex)) %>%
+  left_join(pop_binary, by = c("period_decade", "ethnicity", "age_group", "sex", "imd_binary")) %>%
+  filter(!is.na(population), !is.na(n))
+
+run_poisson_binary_total <- function(df) {
+  
+  df <- df %>%
+    filter(
+      age_group %in% age_group[ave(n, age_group, FUN = sum) > 0],
+      ethnicity %in% ethnicity[ave(n, ethnicity, FUN = sum) > 0]
+    )
+  
+  if (
+    n_distinct(df$ethnicity) < 2 ||
+    n_distinct(df$imd_binary) < 2 ||
+    sum(df$n) == 0
+  ) {
+    message("Skipping: Insufficient data or factor levels")
+    return(tibble())
+  }
+
+  df <- df %>%
+    mutate(
+      ethnicity = relevel(factor(ethnicity), ref = "White"),
+      imd_binary = relevel(factor(imd_binary), ref = "Low deprivation"),
+      age_group = factor(age_group),
+      sex = factor(sex)
+    )
+
+  tryCatch({
+    model <- glm(
+      n ~ ethnicity * imd_binary + age_group + sex,
+      offset = log(population),
+      family = poisson(link = "log"),
+      data = df
+    )
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(grepl("ethnicity.*:imd_binary", term)) %>%
+      mutate(
+        stroke_class = "Total",
+        period_decade = unique(df$period_decade)
+      )
+
+  }, error = function(e) {
+    message("Model failed: ", e$message)
+    return(tibble())
+  })
+}
+
+interaction_results_binary_total <- model_data_binary_total %>%
+  group_by(period_decade) %>%
+  group_split() %>%
+  map_dfr(run_poisson_binary_total)
+
+interaction_results_binary_total_clean <- interaction_results_binary_total %>%
+  mutate(
+    IRR = round(estimate, 2),
+    CI = paste0("(", round(conf.low, 2), "–", round(conf.high, 2), ")"),
+    `p-value` = case_when(
+      is.na(p.value) ~ "NA",
+      p.value < 0.001 ~ "<0.001",
+      TRUE ~ formatC(p.value, format = "f", digits = 3)
+    )
+  ) %>%
+  select(
+    Period = period_decade,
+    `Stroke type` = stroke_class,
+    `Interaction term` = term,
+    IRR,
+    CI,
+    `p-value`
+  )
+
+write_xlsx(interaction_results_binary_total_clean, "InteractionIMDbinarTotalyDecade.xlsx")
+
+# ---------------------------------------------------------------
+# Marginal effects
+# ---------------------------------------------------------------
+
+library(emmeans)
+
+model <- glm(
+  n ~ ethnicity * imd_binary + age_group + sex,
+  offset = log(population),
+  family = poisson(link = "log"),
+  data = model_data_binary
+)
+
+# Get predicted incidence rates per ethnicity × IMD group
+marginal_rates <- emmeans(
+  model,
+  ~ ethnicity * imd_binary,
+  type = "response"
+)
+
+# View or summarise
+summary(marginal_rates)
+
+marginal_rates_clean <- summary(marginal_rates) %>%
+  mutate(
+    predicted_rate_100k = response * 100000,
+    lower_100k = lower.CL * 100000,
+    upper_100k = upper.CL * 100000
+  )
+
+marginal_rates_df <- summary(marginal_rates)
+head(marginal_rates_df)
+
+marginal_rates_clean <- marginal_rates_df %>%
+  mutate(
+    predicted_rate_100k = rate * 100000,
+    lower_100k = asymp.LCL * 100000,
+    upper_100k = asymp.UCL * 100000
+  )
+
+
+
+# == This was good, but we need subtype and we need decades ==
+
+poisson_ethnicity_imd_binary <- poisson_ethnicity_imd_binary %>%
+  mutate(population_scaled = population / 100000)
+
+
+model <- glm(n ~ ethnicity * imd_binary + age_group + sex,
+             offset = log(population_scaled),
+             family = poisson(link = "log"),
+             data = poisson_ethnicity_imd_binary)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+========================================== PREVIOUS CODE ======================================================================
+
+#Interaction models 
 
 library(dplyr)
 
