@@ -2200,59 +2200,1003 @@ write_xlsx(interaction_results_binary_total_clean, "InteractionIMDbinarTotalyDec
 # ---------------------------------------------------------------
 # Marginal effects
 # ---------------------------------------------------------------
+library(dplyr)
+library(tidyr)
+
+# VALID AGE GROUPS
+valid_age_groups <- c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                      "50-54", "55-59", "60-64", "65-69", "70-74", "75+")
+
+# Cleaned stroke case counts by age, IMD binary, and ethnicity
+stroke_cases_imd_cleaned <- slsr_clean_imd_groups %>%
+  filter(stroke_class %in% c("Ischaemic", "PICH", "SAH"),
+         !ethnicity %in% c("Black Other", "Unknown"),
+         !is.na(age_group),
+         !is.na(imd_tertile),
+         !is.na(sex)) %>%
+  mutate(
+    imd_binary = ifelse(imd_tertile == "High deprivation", "High deprivation", "Low deprivation"),
+    period_decade = case_when(
+      period %in% c("1995-1999", "2000-2004") ~ "1995-2004",
+      period %in% c("2005-2009", "2010-2014") ~ "2005-2014",
+      period %in% c("2015-2019", "2020-2024") ~ "2015-2024",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(period_decade)) %>%
+  group_by(period_decade, stroke_class, age_group, ethnicity, sex, imd_binary) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Create total stroke rows
+stroke_cases_total <- stroke_cases_imd_cleaned %>%
+  group_by(period_decade, age_group, ethnicity, sex, imd_binary) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  mutate(stroke_class = "Total")
+
+# Combine subtype and total stroke counts
+stroke_cases_imd_all <- bind_rows(stroke_cases_imd_cleaned, stroke_cases_total)
+
+# Clean the pop
+pop_binary <- pop_with_imd %>%
+  filter(Year >= 1995) %>%
+  mutate(
+    age_group = case_when(
+      `Age Range` %in% c("75-79", "80-84", "85+") ~ "75+",
+      TRUE ~ `Age Range`
+    ),
+    period_decade = case_when(
+      Year %in% 1995:2004 ~ "1995-2004",
+      Year %in% 2005:2014 ~ "2005-2014",
+      Year %in% 2015:2024 ~ "2015-2024"
+    ),
+    imd_binary = case_when(
+      imd_tertile == "High deprivation" ~ "High deprivation",
+      imd_tertile %in% c("Medium deprivation", "Low deprivation") ~ "Low deprivation"
+    ),
+    sex = recode(Sex, "Male" = "Male", "M" = "Male", "Female" = "Female", "F" = "Female"),
+    ethnicity = Ethnicity
+  ) %>%
+  group_by(period_decade, ethnicity, imd_binary, age_group, sex) %>%
+  summarise(population = sum(Total_adjusted, na.rm = TRUE), .groups = "drop")
+
+
+# Sanity Check
+pop_binary %>%
+     group_by(period_decade) %>%
+     summarise(total = sum(population))
+
+
+# Build the poisson dataset
+poisson_data <- stroke_cases_imd_all %>%
+  left_join(pop_binary, 
+            by = c("period_decade", "age_group", "ethnicity", "sex", "imd_binary")) %>%
+  filter(!is.na(population)) %>%
+  mutate(
+    age_group = factor(age_group),
+    ethnicity = factor(ethnicity),
+    sex = factor(sex),
+    imd_binary = factor(imd_binary),
+    stroke_class = factor(stroke_class)
+  )
+
+# Fit the poisson
+model_full <- glm(
+  n ~ stroke_class * ethnicity * imd_binary + age_group + sex + period_decade + offset(log(population)),
+  data = poisson_data,
+  family = poisson()
+)
+
+
+# Calculate the marginal effects overall
+marginal_by_stroke_decade_eth_imd <- emmeans(
+  model_full,
+  ~ stroke_class * period_decade * ethnicity * imd_binary,
+  type = "response"
+) %>%
+  summary() %>%
+  mutate(
+    rate_per_100k = rate * 1e5,
+    LCL_per_100k = asymp.LCL * 1e5,
+    UCL_per_100k = asymp.UCL * 1e5
+  )
+
+write_xlsx(marginal_by_stroke_decade_eth_imd, "marginal_by_stroke_decade_eth_imd.xlsx")
+
+# The model is overdispersion >10, fitting then a negative binomial model
+# Fit the model
+library(MASS)
+
+model_nb <- glm.nb(
+  n ~ ethnicity * imd_binary + age_group + sex + stroke_class + period_decade + offset(log(population)),
+  data = poisson_data
+)
+
+dispersion_nb <- sum(residuals(model_nb, type = "pearson")^2) / df.residual(model_nb)
+dispersion_nb  # Should be ~1.17 (good)
+
+# Get the total population by group
+population_by_group <- poisson_data %>%
+  ungroup() %>%
+  dplyr::select(period_decade, ethnicity, imd_binary, age_group, sex, population) %>%
+  distinct() %>%
+  group_by(period_decade, ethnicity, imd_binary) %>%
+  summarise(pop = sum(population), .groups = "drop")
+
+# Marginal predicted counts + standardised rates
+library(emmeans)
+
+marginal_nb_results <- emmeans(
+  model_nb,
+  ~ stroke_class * period_decade * ethnicity * imd_binary,
+  type = "response"
+) %>%
+  summary() %>%
+  left_join(population_by_group, by = c("period_decade", "ethnicity", "imd_binary")) %>%
+  mutate(
+    rate_per_100k = response / pop * 1e5,
+    LCL_per_100k = asymp.LCL / pop * 1e5,
+    UCL_per_100k = asymp.UCL / pop * 1e5
+  )
+
+# Apparently these are crude
+newdata <- expand.grid(
+  period_decade = unique(poisson_data$period_decade),
+  ethnicity = unique(poisson_data$ethnicity),
+  imd_binary = unique(poisson_data$imd_binary),
+  stroke_class = unique(poisson_data$stroke_class),
+  age_group = unique(poisson_data$age_group),
+  sex = unique(poisson_data$sex)
+)
+esp_weights <- tibble::tibble(
+  age_group = c("20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75+"),
+  esp_weight = c(6000, 6000, 7000, 7000, 7000, 7000,
+                 7000, 6000, 5000, 4000, 3000, 2000)
+)
+
+newdata <- newdata %>%
+  left_join(pop_binary, 
+            by = c("period_decade", "ethnicity", "age_group", "sex", "imd_binary")) %>%
+  left_join(esp_weights, by = "age_group") %>%
+  filter(!is.na(population), !is.na(esp_weight))
+
+# Predict fitter rate
+newdata <- newdata %>%
+  mutate(pred = predict(model_nb, newdata = ., type = "response"))
+
+# Compute
+newdata <- newdata %>%
+  mutate(pred_rate = pred / population * 1e5)
 
 library(emmeans)
 
-model <- glm(
-  n ~ ethnicity * imd_binary + age_group + sex,
-  offset = log(population),
-  family = poisson(link = "log"),
-  data = model_data_binary
-)
-
-# Get predicted incidence rates per ethnicity × IMD group
-marginal_rates <- emmeans(
-  model,
-  ~ ethnicity * imd_binary,
+# Assuming `model_nb` and `newdata` already defined
+preds_with_ci <- emmeans(
+  model_nb,
+  ~ stroke_class * period_decade * ethnicity * imd_binary * age_group * sex,
   type = "response"
+) %>%
+  summary()  # This includes response, SE, asymp.LCL, asymp.UCL
+
+# Safe version using dplyr::select to avoid masking issues
+newdata <- newdata %>%
+  left_join(
+    preds_with_ci %>%
+      dplyr::select(
+        stroke_class, period_decade, ethnicity, imd_binary, age_group, sex,
+        pred = response, asymp.LCL, asymp.UCL
+      ),
+    by = c("stroke_class", "period_decade", "ethnicity", "imd_binary", "age_group", "sex")
+  )
+age_standardised <- newdata %>%
+  mutate(
+    weight_prop = esp_weight / sum(esp_weight),
+
+    rate = pred / population * 1e5,
+    rate_lcl = asymp.LCL / population * 1e5,
+    rate_ucl = asymp.UCL / population * 1e5,
+
+    weighted_rate = rate * weight_prop,
+    weighted_rate_lcl = rate_lcl * weight_prop,
+    weighted_rate_ucl = rate_ucl * weight_prop
+  ) %>%
+  group_by(period_decade, ethnicity, imd_binary, stroke_class) %>%
+  summarise(
+    age_std_rate_per_100k = sum(weighted_rate),
+    lcl_per_100k = sum(weighted_rate_lcl),
+    ucl_per_100k = sum(weighted_rate_ucl),
+    .groups = "drop"
+  )
+
+# 1. Rename pred.x to pred for clarity
+newdata <- newdata %>%
+  rename(pred = pred.x)
+
+# 2. Compute age-standardised rates with confidence intervals
+age_standardised <- newdata %>%
+  mutate(
+    weight_prop = esp_weight / sum(esp_weight),  # Normalize ESP weights
+
+    # Calculate rates per 100k for point estimate and CIs
+    rate = pred / population * 1e5,
+    rate_lcl = asymp.LCL / population * 1e5,
+    rate_ucl = asymp.UCL / population * 1e5,
+
+    # Apply ESP weights
+    weighted_rate = rate * weight_prop,
+    weighted_rate_lcl = rate_lcl * weight_prop,
+    weighted_rate_ucl = rate_ucl * weight_prop
+  ) %>%
+  group_by(period_decade, ethnicity, imd_binary, stroke_class) %>%
+  summarise(
+    age_std_rate_per_100k = sum(weighted_rate),
+    lcl_per_100k = sum(weighted_rate_lcl),
+    ucl_per_100k = sum(weighted_rate_ucl),
+    .groups = "drop"
+  )
+
+
+### == MARGINSSS***
+newdata <- expand.grid(
+  period_decade = unique(poisson_data$period_decade),
+  ethnicity = unique(poisson_data$ethnicity),
+  imd_binary = unique(poisson_data$imd_binary),
+  stroke_class = unique(poisson_data$stroke_class),
+  age_group = unique(poisson_data$age_group),
+  sex = unique(poisson_data$sex)
 )
 
-# View or summarise
-summary(marginal_rates)
+newdata <- newdata %>%
+  left_join(pop_binary, 
+            by = c("period_decade", "ethnicity", "age_group", "sex", "imd_binary")) %>%
+  left_join(esp_weights, by = "age_group") %>%
+  filter(!is.na(population), !is.na(esp_weight))
+newdata <- newdata %>%
+  mutate(pred = predict(model_nb, newdata = ., type = "response"))
 
-marginal_rates_clean <- summary(marginal_rates) %>%
-  mutate(
-    predicted_rate_100k = response * 100000,
-    lower_100k = lower.CL * 100000,
-    upper_100k = upper.CL * 100000
+newdata <- newdata %>%
+  mutate(pred_rate = pred / population * 1e5)
+
+age_std_results <- newdata %>%
+  group_by(period_decade, ethnicity, imd_binary, stroke_class) %>%
+  summarise(
+    std_rate_per_100k = sum(pred_rate * esp_weight, na.rm = TRUE) / sum(esp_weight),
+    .groups = "drop"
   )
 
-marginal_rates_df <- summary(marginal_rates)
-head(marginal_rates_df)
+pred_with_ci <- predict(model_nb, newdata = newdata, type = "response", se.fit = TRUE)
 
-marginal_rates_clean <- marginal_rates_df %>%
+newdata <- newdata %>%
   mutate(
-    predicted_rate_100k = rate * 100000,
-    lower_100k = asymp.LCL * 100000,
-    upper_100k = asymp.UCL * 100000
+    pred = pred_with_ci$fit,
+    se = pred_with_ci$se.fit,
+    lcl = pred - 1.96 * se,
+    ucl = pred + 1.96 * se
+  ) %>%
+  mutate(
+    pred_rate = pred / population * 1e5,
+    rate_lcl = pmax(0, lcl / population * 1e5),  # Ensure LCL ≥ 0
+    rate_ucl = ucl / population * 1e5
   )
 
+age_std_results <- newdata %>%
+  group_by(period_decade, ethnicity, imd_binary, stroke_class) %>%
+  summarise(
+    std_rate_per_100k = sum(pred_rate * esp_weight) / sum(esp_weight),
+    lcl_per_100k = sum(rate_lcl * esp_weight) / sum(esp_weight),
+    ucl_per_100k = sum(rate_ucl * esp_weight) / sum(esp_weight),
+    .groups = "drop"
+  )
+
+write_xlsx(age_std_results, "age_std_results.xlsx")
+
+# Plotting:
+
+library(ggplot2)
+library(dplyr)
+
+# Loop through stroke types
+for (stroke in c("Total", "Ischaemic", "PICH", "SAH")) {
+  
+  plot_data <- age_std_results %>% filter(stroke_class == stroke)
+  
+  p <- ggplot(plot_data, aes(x = ethnicity, y = std_rate_per_100k, fill = imd_binary)) +
+    geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+    geom_errorbar(
+      aes(ymin = lcl_per_100k, ymax = ucl_per_100k),
+      position = position_dodge(width = 0.7),
+      width = 0.2
+    ) +
+    facet_wrap(~ period_decade) +
+    labs(
+      title = "Age-Standardised Predicted Stroke Rates by Ethnicity and Deprivation",
+      subtitle = stroke,
+      x = "Ethnicity",
+      y = "Age-standardised predicted rate per 100,000",
+      fill = "Deprivation Level"
+    ) +
+    scale_fill_manual(values = c("Low deprivation" = "#2b8cbe", "High deprivation" = "#de2d26")) +
+    coord_cartesian(ylim = c(0, NA)) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "bottom"
+    )
+  
+  print(p)  # View interactively
+  ggsave(paste0("AgeStd_PredictedRate_", stroke, ".png"), plot = p, width = 10, height = 6, dpi = 300)
+}
 
 
-# == This was good, but we need subtype and we need decades ==
 
-poisson_ethnicity_imd_binary <- poisson_ethnicity_imd_binary %>%
-  mutate(population_scaled = population / 100000)
+# Pearson residuals
+pearson_resid <- residuals(model_nb, type = "pearson")
+fitted_vals <- fitted(model_nb)
+
+# Plot 1: Residuals vs Fitted
+plot(fitted_vals, pearson_resid,
+     xlab = "Fitted values", ylab = "Pearson residuals",
+     main = "Residuals vs Fitted", pch = 1)
+abline(h = 0, col = "red", lty = 2)
+
+# Plot 2: Histogram
+hist(pearson_resid,
+     breaks = 30,
+     col = "grey",
+     main = "Histogram of Pearson Residuals",
+     xlab = "Residuals")
 
 
-model <- glm(n ~ ethnicity * imd_binary + age_group + sex,
-             offset = log(population_scaled),
-             family = poisson(link = "log"),
-             data = poisson_ethnicity_imd_binary)
+
+##### Lastly risk factorssss <3 
+library(sandwich)
+library(lmtest)
+library(dplyr)
+
+#creating imd_binary in the slsr_clean
+
+slsr_clean <- slsr_clean %>%
+  mutate(imd_binary = case_when(
+    imd_decile %in% 1:3 ~ "High deprivation",
+    imd_decile %in% 4:10 ~ "Low/Medium deprivation",
+    TRUE ~ NA_character_
+  ))
+
+# Recode reference groups
+slsr_clean$ethnicity <- relevel(factor(slsr_clean$ethnicity), ref = "White")
+slsr_clean$imd_binary <- relevel(factor(slsr_clean$imd_binary), ref = "Low/Medium deprivation")
+
+# Run Poisson regression with robust SEs
+model <- glm(rfphyp ~ ethnicity * imd_binary, family = poisson(link = "log"), data = slsr_clean)
+
+# Robust SEs
+robust_se <- sqrt(diag(vcovHC(model, type = "HC0")))
+
+# Exponentiated coefficients (adjusted prevalence ratios)
+results <- coeftest(model, vcov. = vcovHC(model, type = "HC0"))
+exp_coef <- exp(coef(model))
+ci_lower <- exp(coef(model) - 1.96 * robust_se)
+ci_upper <- exp(coef(model) + 1.96 * robust_se)
+
+# Output table
+apr_table <- data.frame(
+  term = names(coef(model)),
+  aPR = round(exp_coef, 2),
+  CI = paste0("(", round(ci_lower, 2), "–", round(ci_upper, 2), ")"),
+  p_value = round(results[, 4], 3)
+)
+
+print(apr_table)
+
+# Now wrap it in a loop and get it tidy
+library(sandwich)
+library(lmtest)
+library(dplyr)
+library(purrr)
+library(stringr)
+
+# Ensure imd_binary is defined
+slsr_clean <- slsr_clean %>%
+  mutate(imd_binary = case_when(
+    imd_decile %in% 1:3 ~ "High deprivation",
+    imd_decile %in% 4:10 ~ "Low/Medium deprivation",
+    TRUE ~ NA_character_
+  ))
+
+# Set reference groups
+slsr_clean <- slsr_clean %>%
+  mutate(
+    ethnicity = relevel(factor(ethnicity), ref = "White"),
+    imd_binary = relevel(factor(imd_binary), ref = "Low/Medium deprivation")
+  )
+
+# Extract biomarker column names
+# Ensure dplyr is loaded
+library(dplyr)
+
+# Correct way to extract biomarker column names
+biomarker_vars <- names(slsr_clean)[
+  grepl("^rf|^sld_rec|^kidney_rec|^ever_smoker|^bmindex", names(slsr_clean))
+]
+
+# Function to run robust Poisson regression for one biomarker
+run_apr_model <- function(var) {
+  if (length(unique(slsr_clean[[var]])) < 2) return(NULL)  # Skip if no variation
+  
+  formula <- as.formula(paste(var, "~ ethnicity * imd_binary"))
+  model <- glm(formula, family = poisson(link = "log"), data = slsr_clean)
+  robust_se <- sqrt(diag(vcovHC(model, type = "HC0")))
+  results <- coeftest(model, vcov. = vcovHC(model, type = "HC0"))
+  exp_coef <- exp(coef(model))
+  ci_lower <- exp(coef(model) - 1.96 * robust_se)
+  ci_upper <- exp(coef(model) + 1.96 * robust_se)
+  
+  data.frame(
+    biomarker = var,
+    term = names(coef(model)),
+    aPR = round(exp_coef, 2),
+    CI = paste0("(", round(ci_lower, 2), "–", round(ci_upper, 2), ")"),
+    p_value = round(results[, 4], 3),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Run across all biomarkers and bind results
+apr_results <- map_dfr(biomarker_vars, run_apr_model)
+
+# View or save final table
+print(apr_results)
+# write.csv(apr_results, "adjusted_prevalence_ratios.csv", row.names = FALSE)
+
+library(dplyr)
+library(tidyr)
+
+# Tidy and clean the APR results table
+
+library(dplyr)
+library(tidyr)
+
+# Clean and format APR results table
+apr_formatted <- apr_results %>%
+  mutate(
+    term = gsub("^ethnicity", "Ethnicity: ", term),
+    term = gsub("^imd_binary", "Deprivation: ", term),
+    term = gsub("ethnicity", "Ethnicity: ", term),
+    term = gsub("imd_binary", "Deprivation: ", term),
+    term = gsub(":", " × ", term),
+    term = ifelse(term == "(Intercept)", "Reference group (White, Low/Medium deprivation)", term),
+    p_value = ifelse(p_value < 0.001, "<0.001", sprintf("%.3f", p_value))
+  )
+
+# Rename and reorder columns using base R syntax to avoid `select()` issues
+colnames(apr_formatted) <- c("Risk Factor", "Term", "Adjusted PR", "95% CI", "p-value")
+apr_formatted <- apr_formatted[, c("Risk Factor", "Term", "Adjusted PR", "95% CI", "p-value")]
+
+# View
+print(apr_formatted, n = 100)
+
+# Optional: write to CSV
+# write.csv(apr_formatted, "formatted_apr_results.csv", row.names = FALSE)
+
+# its confusing
+library(sandwich)
+library(lmtest)
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+# List of biomarker variable names
+biomarkers <- c("rfphyp", "rfpcho", "rfpdep", "rfpaf", "sld_rec", "kidney_rec", 
+                "rfppvd", "rfpihd", "rfpmi", "rfpdia", "rfdrik", "ever_smoker", "bmindex")
+
+# Function to compute combined aPRs
+get_combined_apr <- function(biomarker) {
+  model <- glm(as.formula(paste(biomarker, "~ ethnicity * imd_binary")),
+               family = poisson(link = "log"), data = slsr_clean)
+
+  vcov_robust <- vcovHC(model, type = "HC0")
+  coefs <- coef(model)
+  robust_se <- sqrt(diag(vcov_robust))
+
+  terms <- names(coefs)
+
+  main_eth <- terms[grepl("^ethnicity", terms) & !grepl(":", terms)]
+  main_dep <- "imd_binaryHigh deprivation"
+  interactions <- terms[grepl(":", terms)]
+
+  get_apr <- function(e, int_term) {
+    sum_log <- coefs[e] + coefs[main_dep] + coefs[int_term]
+    sum_se <- sqrt(vcov_robust[e, e] + vcov_robust[main_dep, main_dep] + vcov_robust[int_term, int_term] +
+                   2 * vcov_robust[e, main_dep] +
+                   2 * vcov_robust[e, int_term] +
+                   2 * vcov_robust[main_dep, int_term])
+    apr <- exp(sum_log)
+    ci_l <- exp(sum_log - 1.96 * sum_se)
+    ci_u <- exp(sum_log + 1.96 * sum_se)
+    data.frame(
+      `Risk Factor` = biomarker,
+      Ethnicity = sub("^ethnicity", "", e),
+      Deprivation = "High deprivation",
+      `Combined aPR` = round(apr, 2),
+      `95% CI` = paste0("(", round(ci_l, 2), "–", round(ci_u, 2), ")")
+    )
+  }
+
+  map2_dfr(main_eth, interactions, get_apr)
+}
+
+# Create ever_smoker
+slsr_clean <- slsr_clean %>%
+  mutate(ever_smoker = case_when(
+    rfsmok %in% c(2, 3) ~ 1,
+    rfsmok == 1 ~ 0,
+    TRUE ~ NA_real_
+  ))
+
+# Tidy names
+combined_apr_table <- combined_apr_table %>%
+  rename(
+    `Risk Factor` = Risk.Factor,
+    `Combined aPR` = Combined.aPR,
+    `95% CI` = X95..CI
+  )
+
+# Apply across all biomarkers
+combined_apr_table <- map_dfr(biomarkers, get_combined_apr)
+
+# Reference rows for each biomarker
+ref_row <- data.frame(
+  `Risk Factor` = unique(combined_apr_table$`Risk Factor`),
+  Ethnicity = "White",
+  Deprivation = "Low/Medium deprivation",
+  `Combined aPR` = 1.00,
+  `95% CI` = "(ref)"
+)
+
+# Combine and arrange
+final_table <- bind_rows(combined_apr_table, ref_row) %>%
+  arrange(`Risk Factor`, match(Ethnicity, c("White", "Black African", "Black Caribbean", "Black Other", "Other")))
+
+# View final table
+View(final_table)
+
+### With p values
+
+library(sandwich)
+library(lmtest)
+library(dplyr)
+library(purrr)
+library(broom)
+
+# Function to calculate combined aPRs and CIs from interaction model
+get_combined_apr_with_p <- function(biomarker) {
+  formula <- as.formula(paste0(biomarker, " ~ ethnicity * imd_binary"))
+  model <- glm(formula, family = poisson(link = "log"), data = slsr_clean)
+  cov_mat <- vcovHC(model, type = "HC0")
+  coefs <- coef(model)
+  terms <- names(coefs)
+
+  eth_groups <- c("Black African", "Black Caribbean", "Black Other", "Other")
+  dep_group <- "imd_binaryHigh deprivation"
+
+  output <- lapply(eth_groups, function(eth) {
+    eth_term <- paste0("ethnicity", eth)
+    int_term <- paste0(eth_term, ":", dep_group)
+    base <- coefs[eth_term] + coefs[dep_group] + coefs[int_term]
+    var <- cov_mat[eth_term, eth_term] + 
+           cov_mat[dep_group, dep_group] + 
+           cov_mat[int_term, int_term] +
+           2 * cov_mat[eth_term, dep_group] +
+           2 * cov_mat[eth_term, int_term] +
+           2 * cov_mat[dep_group, int_term]
+    se <- sqrt(var)
+    z <- base / se
+    p <- 2 * pnorm(-abs(z))
+    
+    data.frame(
+      `Risk Factor` = biomarker,
+      Ethnicity = eth,
+      Deprivation = "High deprivation",
+      `Combined aPR` = round(exp(base), 2),
+      `95% CI` = paste0("(", round(exp(base - 1.96 * se), 2), "–", round(exp(base + 1.96 * se), 2), ")"),
+      `p-value` = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)),  # always return character
+      stringsAsFactors = FALSE
+    )
+  }) %>% bind_rows()
+
+  return(output)
+}
+
+
+combined_apr_table <- combined_apr_table %>%
+  rename(
+    `Risk Factor` = Risk.Factor,
+    `Combined aPR` = Combined.aPR,
+    `95% CI` = X95..CI,
+    `p-value` = p.value
+  )
+
+ref_rows <- data.frame(
+  `Risk Factor` = unique(combined_apr_table$`Risk Factor`),
+  Ethnicity = "White",
+  Deprivation = "Low/Medium deprivation",
+  `Combined aPR` = 1.00,
+  `95% CI` = "(ref)",
+  `p-value` = "(ref)"
+)
+
+final_combined_table <- bind_rows(combined_apr_table, ref_rows) %>%
+  arrange(`Risk Factor`, match(Ethnicity, c("White", "Black African", "Black Caribbean", "Black Other", "Other")))
+
+# until here worked 
+# Run across biomarkers
+combined_apr_table <- map_dfr(biomarkers, get_combined_apr_with_p)
+
+# Add reference rows
+ref_rows <- data.frame(
+  `Risk Factor` = unique(combined_apr_table$`Risk Factor`),
+  Ethnicity = "White",
+  Deprivation = "Low/Medium deprivation",
+  `Combined aPR` = 1.00,
+  `95% CI` = "(ref)",
+  `p-value` = "(ref)"
+)
+
+# Bind and sort
+final_table <- bind_rows(combined_apr_table, ref_rows) %>%
+  arrange(`Risk Factor`, match(Ethnicity, c("White", "Black African", "Black Caribbean", "Black Other", "Other")))
+
+View(final_table)
+
+
+# Standarising age and sex:
+model <- glm(
+  rfphyp ~ ethnicity * imd_binary + age_group + sex,
+  family = poisson(link = "log"),
+  data = slsr_clean
+)
+
+slsr_clean <- slsr_clean %>%
+  mutate(
+    age_group = cut(age, breaks = c(0, 44, 54, 64, 74, 84, Inf), labels = c("<45", "45–54", "55–64", "65–74", "75–84", "85+")),
+    sex = factor(sex, levels = c("Male", "Female"))
+  )
+
+library(sandwich)
+library(lmtest)
+
+# Robust SEs
+robust_se <- sqrt(diag(vcovHC(model, type = "HC0")))
+
+# Coefficients and CI
+results <- coeftest(model, vcov. = vcovHC(model, type = "HC0"))
+exp_coef <- exp(coef(model))
+ci_lower <- exp(coef(model) - 1.96 * robust_se)
+ci_upper <- exp(coef(model) + 1.96 * robust_se)
+
+# Output table
+apr_table <- data.frame(
+  term = names(coef(model)),
+  aPR = round(exp_coef, 2),
+  CI = paste0("(", round(ci_lower, 2), "–", round(ci_upper, 2), ")"),
+  p_value = round(results[, 4], 3)
+)
+
+print(apr_table)
+
+# worked nicely, loop it
+library(dplyr)
+library(sandwich)
+library(lmtest)
+library(purrr)
+
+# Make sure age_group and sex are set
+slsr_clean <- slsr_clean %>%
+  mutate(
+    age_group = cut(age, breaks = c(0, 44, 54, 64, 74, 84, Inf),
+                    labels = c("<45", "45–54", "55–64", "65–74", "75–84", "85+")),
+    sex = factor(sex, levels = c("Male", "Female")),
+    imd_binary = case_when(
+      imd_decile %in% 1:3 ~ "High deprivation",
+      imd_decile %in% 4:10 ~ "Low/Medium deprivation",
+      TRUE ~ NA_character_
+    ),
+    ethnicity = relevel(factor(ethnicity), ref = "White"),
+    imd_binary = relevel(factor(imd_binary), ref = "Low/Medium deprivation")
+  )
+
+# Your list of biomarkers
+biomarkers <- c("rfphyp", "rfpcho", "rfpdep", "rfpaf", "sld_rec", "kidney_rec", "rfppvd", "rfpihd",
+                "rfpmi", "rfpdia", "rfdrik", "ever_smoker", "bmindex")
+
+# Function to fit adjusted Poisson model for a biomarker
+get_adjusted_apr <- function(var) {
+  formula <- as.formula(paste(var, "~ ethnicity * imd_binary + age_group + sex"))
+  model <- glm(formula, family = poisson(link = "log"), data = slsr_clean)
+  se <- sqrt(diag(vcovHC(model, type = "HC0")))
+  results <- coeftest(model, vcov. = vcovHC(model, type = "HC0"))
+  exp_coef <- exp(coef(model))
+  ci_lower <- exp(coef(model) - 1.96 * se)
+  ci_upper <- exp(coef(model) + 1.96 * se)
+  p_vals <- results[, 4]
+
+  data.frame(
+    `Risk Factor` = var,
+    Term = names(coef(model)),
+    `Adjusted PR` = round(exp_coef, 2),
+    `95% CI` = paste0("(", round(ci_lower, 2), "–", round(ci_upper, 2), ")"),
+    `p-value` = ifelse(p_vals < 0.001, "<0.001", format(round(p_vals, 3), nsmall = 3))
+  )
+}
+
+# Run across all biomarkers
+apr_all <- map_dfr(biomarkers, get_adjusted_apr)
+
+# Tidy term names
+apr_all <- apr_all %>%
+  mutate(
+    Term = gsub("^ethnicity", "Ethnicity: ", Term),
+    Term = gsub("^imd_binary", "Deprivation: ", Term),
+    Term = gsub(":", " × ", Term),
+    Term = ifelse(Term == "(Intercept)",
+                  "Reference group (White, Low/Medium deprivation, <45, Male)",
+                  Term)
+  )
+
+# View it
+View(apr_all)
+write_xlsx(apr_all, "adjusted_prevalence_ratios.xlsx")
+
+# Even tidier?
+apr_tidy <- apr_all %>%
+  dplyr::mutate(
+    Term = stringr::str_replace(Term, "^ethnicity", "Ethnicity: "),
+    Term = stringr::str_replace(Term, "^imd_binary", "Deprivation: "),
+    Term = stringr::str_replace(Term, "^age_group", "Age: "),
+    Term = stringr::str_replace(Term, "^sex", "Sex: "),
+    Term = stringr::str_replace(Term, ":", " × "),
+    Term = ifelse(
+      Term == "(Intercept)",
+      "Reference group (White, Low/Medium deprivation, <45, Male)",
+      Term
+    ),
+    p.value = ifelse(
+      as.numeric(p.value) < 0.001,
+      "<0.001",
+      format(round(as.numeric(p.value), 3), nsmall = 3)
+    )
+  ) %>%
+  dplyr::rename(
+    `Risk Factor` = Risk.Factor,
+    `Adjusted PR` = Adjusted.PR,
+    `95% CI` = X95..CI,
+    `p-value` = p.value
+  ) %>%
+  dplyr::select(`Risk Factor`, Term, `Adjusted PR`, `95% CI`, `p-value`)
+
+### Is getting too complex, lets just do aPR between ethnicities
+library(dplyr)
+library(sandwich)
+library(lmtest)
+library(purrr)
+library(stringr)
+
+# Set ethnicity reference group
+slsr_clean <- slsr_clean %>%
+  mutate(
+    ethnicity = relevel(factor(ethnicity), ref = "White"),
+    age_group = cut(age, breaks = c(0, 44, 54, 64, 74, 84, Inf),
+                    labels = c("<45", "45–54", "55–64", "65–74", "75–84", "85+")),
+    sex = factor(sex, levels = c("Male", "Female"))
+  )
+
+# List of biomarkers
+biomarkers <- c(
+  "rfphyp", "rfpcho", "rfpdep", "rfpaf", "sld_rec", "kidney_rec", "rfppvd", "rfpihd",
+  "rfpmi", "rfpdia", "rfdrik", "ever_smoker", "bmindex"
+)
+
+# Function to run Poisson regression and extract results
+get_ethnicity_apr <- function(var) {
+  formula <- as.formula(paste(var, "~ ethnicity + age_group + sex"))
+  model <- glm(formula, family = poisson(link = "log"), data = slsr_clean)
+  
+  # Robust SEs
+  se <- sqrt(diag(vcovHC(model, type = "HC0")))
+  est <- coef(model)
+  ci_lower <- exp(est - 1.96 * se)
+  ci_upper <- exp(est + 1.96 * se)
+  
+  results <- coeftest(model, vcov. = vcovHC(model, type = "HC0"))
+  
+  data.frame(
+    `Risk Factor` = var,
+    Term = names(est),
+    `Adjusted PR` = round(exp(est), 2),
+    `95% CI` = paste0("(", round(ci_lower, 2), "–", round(ci_upper, 2), ")"),
+    `p-value` = results[, 4],
+    stringsAsFactors = FALSE
+  )
+}
+
+
+# Run across biomarkers
+apr_ethnicity_all <- map_dfr(biomarkers, get_ethnicity_apr)
+
+# If needed, rename them first
+apr_ethnicity_all <- apr_ethnicity_all %>%
+  rename(
+    Risk_Factor = `Risk.Factor`,
+    Adjusted_PR = `Adjusted.PR`,
+    CI_95 = `X95..CI`,
+    p_val = `p.value`
+  )
+
+# Format and clean
+apr_ethnicity_tidy <- apr_ethnicity_all %>%
+  filter(grepl("^ethnicity", Term) | Term == "(Intercept)") %>%
+  mutate(
+    Term = str_replace(Term, "^ethnicity", "Ethnicity: "),
+    Term = ifelse(Term == "(Intercept)", "Reference group (White, <45, Male)", Term),
+    p_val = ifelse(as.numeric(p_val) < 0.001, "<0.001", format(round(as.numeric(p_val), 3), nsmall = 3))
+  ) %>%
+  dplyr::select(
+    `Risk Factor` = Risk_Factor,
+    Term,
+    `Adjusted PR` = Adjusted_PR,
+    `95% CI` = CI_95,
+    `p-value` = p_val
+  )
+write_xlsx(apr_ethnicity_tidy, path = "ethnicity_apr_table.xlsx")
 
 
 
 
+
+
+
+# == Plotting them ==
+
+library(ggplot2)
+library(dplyr)
+
+# Example stroke class to plot
+stroke_to_plot <- "Ischaemic"  # You can loop over this for other types
+
+# Filter your modeled results
+data_filtered <- marginal_nb_results %>%
+  filter(stroke_class == stroke_to_plot)
+
+# Plot
+ggplot(data_filtered, aes(x = ethnicity, y = rate_per_100k, fill = imd_binary)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(
+    aes(ymin = LCL_per_100k, ymax = UCL_per_100k),
+    position = position_dodge(width = 0.7),
+    width = 0.2
+  ) +
+  facet_wrap(~ period_decade) +
+  labs(
+    title = "Model-Predicted Stroke Rates by Ethnicity and Deprivation",
+    subtitle = stroke_to_plot,
+    x = "Ethnicity",
+    y = "Predicted rate per 100,000",
+    fill = "Deprivation Level"
+  ) +
+  scale_fill_manual(values = c("Low deprivation" = "#2b8cbe", "High deprivation" = "#de2d26")) +
+  coord_cartesian(ylim = c(0, NA)) +  # Adjust Y-limit as needed
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+# Save if needed
+ggsave(paste0("PredictedRate_", stroke_to_plot, ".png"), width = 10, height = 6, dpi = 300)
+
+# In a loop
+for (stroke in c("Total", "Ischaemic", "PICH", "SAH")) {
+  plot_data <- marginal_nb_results %>% filter(stroke_class == stroke)
+  
+  p <- ggplot(plot_data, aes(x = ethnicity, y = rate_per_100k, fill = imd_binary)) +
+    geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+    geom_errorbar(
+      aes(ymin = LCL_per_100k, ymax = UCL_per_100k),
+      position = position_dodge(width = 0.7),
+      width = 0.2
+    ) +
+    facet_wrap(~ period_decade) +
+    labs(
+      title = "Model-Predicted Stroke Rates by Ethnicity and Deprivation",
+      subtitle = stroke,
+      x = "Ethnicity",
+      y = "Predicted rate per 100,000",
+      fill = "Deprivation Level"
+    ) +
+    scale_fill_manual(values = c("Low deprivation" = "#2b8cbe", "High deprivation" = "#de2d26")) +
+    coord_cartesian(ylim = c(0, NA)) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "bottom"
+    )
+
+  print(p)  # If running interactively
+  ggsave(paste0("PredictedRate_", stroke, ".png"), plot = p, width = 10, height = 6, dpi = 300)
+}
+
+# its contraintuitive
+install.packages("margins")
+
+library(dplyr)
+library(margins)
+library(broom)
+library(sandwich)
+library(lmtest)
+
+# Define your biomarkers
+biomarkers <- c("rfphyp", "rfpcho", "rfpdep", "rfpaf", "sld_rec", "kidney_rec", 
+                "rfppvd", "rfpihd", "rfpmi", "rfpdia", "rfdrik", "ever_smoker", "bmindex")
+
+# Set reference levels
+slsr_clean$ethnicity <- relevel(factor(slsr_clean$ethnicity), ref = "White")
+slsr_clean$imd_binary <- relevel(factor(slsr_clean$imd_binary), ref = "Low/Medium deprivation")
+
+# Function to compute marginal aPRs and p-values vs reference group
+get_apr_vs_ref <- function(var) {
+  formula <- as.formula(paste0(var, " ~ ethnicity * imd_binary"))
+  model <- glm(formula, family = poisson(link = "log"), data = slsr_clean)
+  
+  # Get predicted margins
+  marg <- margins(model, variables = NULL, at = list(
+    ethnicity = levels(slsr_clean$ethnicity),
+    imd_binary = levels(slsr_clean$imd_binary)
+  ))
+  pred_df <- summary(marg)
+
+  # Extract predicted values per group
+  pred_df <- pred_df %>%
+    mutate(
+      `Risk Factor` = var,
+      Ethnicity = factor(factor(levels(slsr_clean$ethnicity))[ethnicity]),
+      Deprivation = factor(factor(levels(slsr_clean$imd_binary))[imd_binary]),
+      `Predicted aPR` = round(exp(fitted), 2),
+      `95% CI` = paste0("(", round(exp(fitted - 1.96 * se.fitted), 2), "–", round(exp(fitted + 1.96 * se.fitted), 2), ")")
+    ) %>%
+    dplyr::select(`Risk Factor`, Ethnicity, Deprivation, `Predicted aPR`, `95% CI`)
+
+  
+  # Compute p-values vs reference group (White + Low/Med deprivation)
+  ref_apr <- exp(predict(model, newdata = data.frame(
+    ethnicity = "White", imd_binary = "Low/Medium deprivation"
+  )))
+
+  pred_df <- pred_df %>%
+    rowwise() %>%
+    mutate(
+      `p-value vs Ref` = format.pval(
+        coef(summary(model))["(Intercept)", "Pr(>|z|)"], digits = 3
+      )
+    )
+
+  # Mark reference group
+  pred_df <- pred_df %>%
+    mutate(
+      `Predicted aPR` = ifelse(Ethnicity == "White" & Deprivation == "Low/Medium deprivation", 1.00, `Predicted aPR`),
+      `95% CI` = ifelse(Ethnicity == "White" & Deprivation == "Low/Medium deprivation", "(ref)", `95% CI`),
+      `p-value vs Ref` = ifelse(Ethnicity == "White" & Deprivation == "Low/Medium deprivation", "—", `p-value vs Ref`)
+    )
+  
+  return(pred_df)
+}
+
+# Run over all biomarkers
+apr_combined <- biomarkers %>%
+  lapply(get_apr_vs_ref) %>%
+  bind_rows()
+
+# View
+View(apr_combined)
 
 
 
