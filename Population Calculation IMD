@@ -762,13 +762,22 @@ prop_2021 <- summary_2021 %>%
   mutate(prop = Total / sum(Total)) %>%
   select(Sex, Ethnicity, `Age Range`, IMD_score, prop)
 
-pop_with_imd <- pop_interp %>%
-  mutate(IMD_period = as.character(IMD_period)) %>%
-  left_join(
-    prop_2021 %>% mutate(IMD_period = "2021"),
-    by = c("Sex", "Ethnicity", "Age Range" = "Age Range", "IMD_period")
-  ) %>%
-  mutate(Total_adjusted = Total * prop)
+# cleaning
+fix_sex <- function(df) {
+  df %>%
+    mutate(Sex = case_when(
+      Sex == "Females" ~ "Female",
+      Sex == "Males" ~ "Male",
+      TRUE ~ Sex
+    ))
+}
+
+# Apply fix after cleaning
+prop_1991 <- prop_1991 %>% fix_sex()
+prop_2001 <- prop_2001 %>% fix_sex()
+prop_2011 <- prop_2011 %>% fix_sex()
+prop_2021 <- prop_2021 %>% fix_sex()
+pop_interp <- pop_interp %>% fix_sex()
 
 imd_ref <- bind_rows(
   prop_1991 %>% mutate(IMD_period = "1991"),
@@ -776,15 +785,6 @@ imd_ref <- bind_rows(
   prop_2011 %>% mutate(IMD_period = "2011"),
   prop_2021 %>% mutate(IMD_period = "2021")
 )
-
-pop_interp <- pop_interp %>%
-  rename(`Age Range` = `Age Range`) %>%  # to match names
-  mutate(IMD_period = case_when(
-    Year >= 1991 & Year <= 2000 ~ "1991",
-    Year >= 2001 & Year <= 2010 ~ "2001",
-    Year >= 2011 & Year <= 2020 ~ "2011",
-    Year >= 2021 ~ "2021"
-  ))
 
 pop_with_imd <- pop_interp %>%
   left_join(imd_ref, by = c("Sex", "Ethnicity", "Age Range", "IMD_period")) %>%
