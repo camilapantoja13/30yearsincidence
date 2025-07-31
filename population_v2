@@ -1066,3 +1066,128 @@ df_2011_adults <- df_2011_adults %>%
 
 # Stack them into one long dataset
 df_all <- bind_rows(df_1991_adults, df_2001_aldults_, df_2011_adults, df_2021_adults)
+
+# Understanding the quintiles of 2004
+# Save the column name for easier reference
+imd_eng_2004_2007_2010_lsoa01 <- imd_eng_2004_2007_2010_lsoa01 %>%
+  rename(rank_2004 = `2004RANK OF IMD (where 1 is most deprived)`)
+
+# Total number of LSOAs
+total_lsoas <- nrow(imd_eng_2004_2007_2010_lsoa01)
+
+# Check total
+print(total_lsoas)  # usually around 32,482 in England in 2004
+
+# Calculate national quintile thresholds
+cutoffs <- quantile(imd_eng_2004_2007_2010_lsoa01$rank_2004, probs = c(0.2, 0.4, 0.6, 0.8))
+
+print(cutoffs)
+
+I got these
+    20%     40%     60%     80% 
+ 6497.2 12993.4 19489.6 25985.8 
+
+Which are the ranks, now we need to check the scores associated with those cuttofs
+
+# First, rename for ease
+imd_data <- imd_eng_2004_2007_2010_lsoa01 %>%
+  rename(rank_2004 = `2004RANK OF IMD (where 1 is most deprived)`,
+         score_2004 = `2004IMD SCORE`)
+
+imd_eng_2004_2007_2010_lsoa01 <- imd_eng_2004_2007_2010_lsoa01 %>%
+  rename(score_2004 = `2004IMD SCORE`)
+
+
+imd_quintile_cutoffs <- imd_eng_2004_2007_2010_lsoa01 %>%
++     arrange(rank_2004) %>%
++     mutate(n = row_number()) %>%
++     summarise(
++         cutoff_20 = score_2004[round(0.2 * n())],
++         cutoff_40 = score_2004[round(0.4 * n())],
++         cutoff_60 = score_2004[round(0.6 * n())],
++         cutoff_80 = score_2004[round(0.8 * n())]
++     )
+> View(imd_quintile_cutoffs)
+
+ imd_eng_2004_2007_2010_lsoa01 %>%
++     filter(rank_2004 == 1) %>%
++     select(LSOA, score_2004, rank_2004)
+# A tibble: 1 × 3
+  LSOA      score_2004 rank_2004
+  <chr>          <dbl>     <dbl>
+1 E01006559       86.4         1
+
+The most deprived on england is E01006559 which has a score of 86.4, so in this dataset, the most deprived are the highest
+cutoffs=
+20%= 34.21
+40% = 21.15
+60%= 12.72
+80% = 8.35
+
+To create correct population-based quintiles, sort your population dataset by imd_score in descending order (because higher = more deprived)
+
+assign_quintile <- function(score) {
+  case_when(
+    score >= 34.21           ~ 1,  # Most deprived
+    score >= 21.15           ~ 2,
+    score >= 12.72           ~ 3,
+    score >= 8.35            ~ 4,
+    !is.na(score)            ~ 5,  # Least deprived
+    TRUE                     ~ NA_integer_
+  )
+}
+
+df_1991_adults <- df_1991_adults %>%
+  mutate(imd_quintile = assign_quintile(imd_score))
+
+df_2001_adults <- df_2001_aldults_ %>%
+  mutate(imd_quintile = assign_quintile(imd_score))
+
+# Lets follow same for 2011 cutoffs
+
+# First, rename for ease
+imd_eng_2004_2007_2010_lsoa01 <- imd_eng_2004_2007_2010_lsoa01 %>%
+  rename(rank_2010 = `2010imd_rank`,
+         score_2010 = `2010imd_score`)
+
+
+imd_quintile_cutoffs_2010 <- imd_eng_2004_2007_2010_lsoa01 %>%
+     arrange(rank_2010) %>%
+     mutate(n = row_number()) %>%
+     summarise(
+         cutoff_20 = score_2010[round(0.2 * n())],
+         cutoff_40 = score_2010[round(0.4 * n())],
+         cutoff_60 = score_2010[round(0.6 * n())],
+         cutoff_80 = score_2010[round(0.8 * n())]
+     )
+ View(imd_quintile_cutoffs_2010)
+
+ imd_eng_2004_2007_2010_lsoa01 %>%
+     filter(rank_2010 == 1) %>%
+     select(LSOA, score_2010, rank_2010)
+
+# A tibble: 1 × 3
+  LSOA      score_2010 rank_2010
+  <chr>          <dbl>     <dbl>
+1 E01021988       87.8         1
+
+The most deprived on england is E01021988 which has a score of 87.8 in 2010, so in this dataset, the most deprived are the highest
+cutoffs=
+20%= 34.17
+40% = 21.35
+60%= 13.79
+80% = 8.49
+
+assign_quintile_2010 <- function(score) {
+  case_when(
+    score >= 34.21           ~ 1,  # Most deprived
+    score >= 21.15           ~ 2,
+    score >= 12.72           ~ 3,
+    score >= 8.35            ~ 4,
+    !is.na(score)            ~ 5,  # Least deprived
+    TRUE                     ~ NA_integer_
+  )
+}
+
+df_2011_adults <- df_2011_adults %>%
+  mutate(imd_quintile = assign_quintile_2010(imd_score))
