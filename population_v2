@@ -1,0 +1,1068 @@
++         # Extract sex
++         sex = str_extract(cell, "(?<=\\().*?(?=\\s*:)"),
++         
++         # Extract age group (either digits or ranges, e.g., "0 - 4", "85+")
++         age_group = str_match(cell, "aged\\s+(\\d{1,2}\\s*-\\s*\\d{1,2}|\\d{1,2}\\+)")[,2],
++         age_group = str_replace_all(age_group, "\\s*", ""),  # Clean "0 - 4" → "0-4"
++         age_group = if_else(str_detect(cell, "all ages"), "all", age_group),
++         
++         # Extract ethnicity
++         ethnicity = str_match(cell, "Ethnic group\\s*:\\s*(.*?)\\s*\\)")[,2]
++     )
+> View(df_extracted)
+> df_extracted <- df_extracted %>%
++     mutate(
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> df_final <- df_extracted %>%
++     filter(!str_detect(cell, "Total persons"))
+> View(df_final)
+> df_final <- df_extracted %>%
++     filter(
++         !str_detect(cell, "Total persons"),
++         age_group != "all"
++     )
+> df_final <- df_final %>%
++     select(-flag)
+> 1991_with_imd_cleaned <- df_final 
+Error: unexpected input in "1991_"
+> cleaned_1991_imd <- df_final 
+> library(readr)
+> 
+> write_csv(cleaned_1991_imd, "cleaned_1991_imd.csv")
+                                                                                                                                                                                   
+> df_extracted <- df_extracted %>%
++     mutate(
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Carribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> 
+> # Drop total persons
+> df_final <- df_extracted %>%
++     filter(!str_detect(cell, "Total persons"))
+> 
+> df_final <- df_extracted %>%
++     filter(
++         !str_detect(cell, "Total persons"),
++         age_group != "all"
++     )
+> 
+> df_final <- df_final %>%
++     select(-flag)
+> 
+> cleaned_1991_imd <- df_final 
+> df_extracted <- df_extracted %>%
++     mutate(
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Carribean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> 
+> # Drop total persons
+> df_final <- df_extracted %>%
++     filter(!str_detect(cell, "Total persons"))
+> 
+> df_final <- df_extracted %>%
++     filter(
++         !str_detect(cell, "Total persons"),
++         age_group != "all"
++     )
+> 
+> df_final <- df_final %>%
++     select(-flag)
+> 
+> cleaned_1991_imd <- df_final 
+> write_csv(cleaned_1991_imd, "cleaned_1991_imd.csv")
+                                                                                                                                                                                   
+> library(dplyr)
+> 
+> df_1991_summary <- df_cleaned %>%
++     group_by(year, ward, sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg)
++     ) %>%
++     ungroup()
+Error in `group_by()`:
+! Must group by variables found in `.data`.
+Column `year` is not found.
+Column `ward` is not found.
+Column `sex` is not found.
+Column `ethnicity_grouped` is not found.
+Run `rlang::last_trace()` to see where the error occurred.
+> df_1991_summary <- df_cleaned %>%
++     group_by(Date, ward_clean, sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg)
++     ) %>%
++     ungroup()
+Error in `group_by()`:
+! Must group by variables found in `.data`.
+Column `sex` is not found.
+Column `ethnicity_grouped` is not found.
+Run `rlang::last_trace()` to see where the error occurred.
+> df_1991_summary <- df_final %>%
++     group_by(Date, ward_clean, sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg)
++     ) %>%
++     ungroup()
+`summarise()` has grouped output by 'Date', 'ward_clean', 'sex', 'ethnicity_grouped'. You can override using the `.groups` argument.
+> View(df_1991_summary)
+> write_csv(df_1991_summary, "df_1991_summary.csv")
+                                                                                                                                                                                   
+> df_1991_adults <- df_1991_summary %>%
++     filter(str_detect(age_group, "^1[89]") | str_detect(age_group, "^[2-9][0-9]") | str_detect(age_group, "\\+"))
+> View(df_1991_adults)
+> write_csv(df_1991_adults, "df_1991_adults.csv")
+                                                                                                                                                                                   
+> View(df_1991_adults)
+> save.image("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD checked_v2/Cleanining1991.RData")
+> rm (cleaned_1991_imd, df_1991, df_1991_clean, df_1991_slsr, df_1991_slsr_complete, df_1991_summary, df_1991_summary, df_1991_summary, df_cleaned, df_extracted)
+Warning messages:
+1: In rm(cleaned_1991_imd, df_1991, df_1991_clean, df_1991_slsr, df_1991_slsr_complete,  :
+  object 'df_1991_summary' not found
+2: In rm(cleaned_1991_imd, df_1991, df_1991_clean, df_1991_slsr, df_1991_slsr_complete,  :
+  object 'df_1991_summary' not found
+> View(df_final)
+> rm (df_1991_with_imd, df_final, df_with_age)
+> View(imd_2004_filtered)
+> library(readr)
+> library(dplyr)
+> library(stringr)
+> library(tidyr)
+> library(readxl)
+> 
+> # Load the 2001 dataset (TSV)
+> df_2001 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2001.tsv")
+Rows: 9200 Columns: 10                                                                                                                                                               
+── Column specification ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Delimiter: "\t"
+chr (7): Population, Units, Sex, Ethnic Grou, 2003 ST ward, Age, value type
+dbl (2): Date, value
+lgl (1): flag
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+> View(df_2001)
+> df_2001_clean <- df_2001 %>%
++     mutate(
++         ward_clean = str_remove(`2003 ST ward`, "^\\S+\\s+")
++     )
+> View(df_2001_clean)
+> # Filter to valid SLSR wards only
+> filter(ward_clean %in% imd_by_ward_full$ward)
+Error: object 'ward_clean' not found
+> df_2001_clean <- df_2001 %>%
++     filter(ward_clean %in% imd_by_ward_full$ward)
+Error in `filter()`:
+ℹ In argument: `ward_clean %in% imd_by_ward_full$ward`.
+Caused by error:
+! object 'ward_clean' not found
+Run `rlang::last_trace()` to see where the error occurred.
+> df_2001_with_imd <- df_2001_clean %>%
++     left_join(imd_by_ward_full, by = c("ward_clean" = "ward"))
+> View(df_2001_with_imd)
+> df_2001_with_imd %>%
++     filter(is.na(imd_score_avg)) %>%
++     distinct(ward_clean)
+# A tibble: 1 × 1
+  ward_clean
+  <chr>     
+1 Cathedrals
+> View(imd_by_ward)
+> df_2001_clean <- df_2001 %>%
++     mutate(
++         ward_clean = str_remove(`2003 ST ward`, "^\\S+\\s+"),
++         ward_clean = if_else(ward_clean == "Cathedrals", "Cathedral", ward_clean)
++     )
+> df_2001_with_imd <- df_2001_clean %>%
++     left_join(imd_by_ward_full, by = c("ward_clean" = "ward"))
+> View(df_2001_with_imd)
+> df_2001_with_imd %>%
++     filter(is.na(imd_score_avg)) %>%
++     distinct(ward_clean)
+# A tibble: 0 × 1
+# ℹ 1 variable: ward_clean <chr>
+> df_2001_summary <- df_2001_with_imd %>%
++     # Keep only Male and Female rows
++     filter(Sex %in% c("Males", "Females")) %>%
++     
++     # Drop totals across ethnic group or age
++     filter(!str_detect(`Ethnic Grou`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     
++     # Clean age group format
++     mutate(
++         age_group = str_replace(Age, "Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+")
++     ) %>%
++     
++     # Remove those under 18
++     filter(!(age_group %in% c("0–4", "5–7", "5–9", "8–9", "10–14", "15", "16–17"))) %>%
++     
++     # Standardise sex format
++     mutate(sex = str_replace(Sex, "s$", "")) %>%
++     
++ )
+Error: unexpected ')' in:
+"    
+)"
+> df_2001_summary <- df_2001_with_imd %>%
++     # Keep only Male and Female rows
++     filter(Sex %in% c("Males", "Females")) %>%
++     
++     # Drop totals across ethnic group or age
++     filter(!str_detect(`Ethnic Grou`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     
++     # Clean age group format
++     mutate(
++         age_group = str_replace(Age, "Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+")
++     ) %>%
++     
++     # Remove those under 18
++     filter(!(age_group %in% c("0–4", "5–7", "5–9", "8–9", "10–14", "15", "16–17"))) %>%
++     
++     # Standardise sex format
++     mutate(sex = str_replace(Sex, "s$", ""))
+> View(df_2001_summary)
+> df_2001_summary <- df_2001_summary %>%
++     group_by(year = Date, ward = ward_clean, sex, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg),
++         .groups = "drop"
++     )
+> View(df_1991_adults)
+> library(dplyr)
+> library(stringr)
+> 
+> df_2001_summary <- df_2001_with_imd %>%
++     # Keep only Male and Female rows
++     filter(Sex %in% c("Males", "Females")) %>%
++     
++     # Drop totals across ethnic group or age
++     filter(!str_detect(`Ethnic Grou`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     
++     # Extract and clean ethnicity
++     mutate(
++         ethnicity = str_replace(`Ethnic Grou`, "Ethnic group: ", ""),
++         ethnicity_grouped = case_when(
++             ethnicity == "White" ~ "White",
++             ethnicity == "Black African" ~ "Black African",
++             ethnicity == "Black Caribbean" ~ "Black Caribbean",
++             ethnicity == "Black Other" ~ "Black Other",
++             TRUE ~ "Other"
++         ),
++         
++         # Clean and reformat age
++         age_group = str_replace(Age, "Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+"),
++         
++         # Clean sex
++         sex = str_replace(Sex, "s$", "")
++     ) %>%
++     
++     # Filter out under 18s
++     filter(!(age_group %in% c("0–4", "5–7", "5–9", "8–9", "10–14", "15", "16–17"))) %>%
++     
++     # Summarise
++     group_by(year = Date, ward = ward_clean, sex, ethnicity = ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg),
++         .groups = "drop"
++     )
+> View(df_2001_with_imd)
+> mutate(
++     ethnicity = str_replace(`Ethnic Grou`, "Ethnic group: ", ""),
++     ethnicity_grouped = case_when(
++         ethnicity == "White" ~ "White",
++         ethnicity == "Black African" ~ "Black African",
++         ethnicity == "Black Caribbean" ~ "Black Caribbean",
++         ethnicity == "Black Other" ~ "Black Other",
++         TRUE ~ "Other"
++     )
++ )
+Error: object 'Ethnic Grou' not found
+> df_2001_with_ethnicity <- df_2001_with_imd %>%
++     # Remove totals
++     filter(!str_detect(`Ethnic Grou`, "All categories")) %>%
++     
++     # Create a cleaned ethnicity column
++     mutate(
++         ethnicity = str_replace(`Ethnic Grou`, "Ethnic group: ", ""),
++         ethnicity_grouped = case_when(
++             ethnicity == "White" ~ "White",
++             ethnicity == "Black African" ~ "Black African",
++             ethnicity == "Black Caribbean" ~ "Black Caribbean",
++             ethnicity == "Black Other" ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2001_with_ethnicity)
+> View(df_2001_with_ethnicity)
+> df_2001_with_ethnicity <- df_2001_with_imd %>%
++     # Remove "All categories" from ethnicity and age
++     filter(!str_detect(`Ethnic Grou`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     
++     # Clean ethnicity
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2001)
+> View(df_1991_adults)
+> load("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD checked_v2/Cleanining1991.RData")
+> df_2001_cleaned <- df_2001_with_ethnicity %>%
++     mutate(
++         # Remove "Age " prefix
++         age_group = str_replace(Age, "^Age ", ""),
++         
++         # Replace " to " with en dash
++         age_group = str_replace_all(age_group, " to ", "–"),
++         
++         # Convert "85 and over" or similar to "85+"
++         age_group = str_replace(age_group, " and over", "+"),
++         
++         # Clean whitespace
++         age_group = str_trim(age_group)
++     )
+> View(df_2001_cleaned)
+> View(df_cleaned)
+> View(df_extracted)
+> df_extracted <- df_cleaned %>%
++     mutate(
++         # Extract sex
++         sex = str_extract(cell, "(?<=\\().*?(?=\\s*:)"),
++         
++         # Extract age group (either a range, a single number, or "85 and over")
++         age_group = str_match(cell, "aged\\s+(\\d{1,2}\\s*-\\s*\\d{1,2}|\\d{1,2}\\+|\\d{1,2}\\s+and\\s+over)")[,2],
++         
++         # Convert "85 and over" to "85+"
++         age_group = str_replace(age_group, "\\s+and\\s+over", "+"),
++         
++         # Clean up spacing in ranges
++         age_group = str_replace_all(age_group, "\\s*", ""),
++         
++         # Replace "all ages" with "all"
++         age_group = if_else(str_detect(cell, "all ages"), "all", age_group),
++         
++         # Extract ethnicity
++         ethnicity = str_match(cell, "Ethnic group\\s*:\\s*(.*?)\\s*\\)")[,2]
++     )
+> df_extracted <- df_extracted %>%
++     mutate(
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Carribean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_extracted)
+> # Drop total persons
+> df_final <- df_extracted %>%
++     filter(!str_detect(cell, "Total persons"))
+> 
+> df_final <- df_extracted %>%
++     filter(
++         !str_detect(cell, "Total persons"),
++         age_group != "all"
++     )
+> View(df_final)
+> df_final <- df_final %>%
++     select(-flag)
+> 
+> cleaned_1991_imd <- df_final 
+> write_csv(cleaned_1991_imd, "cleaned_1991_imd.csv")
+                                                                                                                                                                                   
+> # Summarising for interpolation and removing <18
+> df_1991_summary <- df_final %>%
++     group_by(Date, ward_clean, sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg)
++     ) %>%
++     ungroup()
+`summarise()` has grouped output by 'Date', 'ward_clean', 'sex', 'ethnicity_grouped'. You can override using the `.groups` argument.
+> View(df_1991_summary)
+> 
+> df_1991_adults <- df_1991_summary %>%
++     filter(str_detect(age_group, "^1[89]") | str_detect(age_group, "^[2-9][0-9]") | str_detect(age_group, "\\+"))
+> View(df_1991_adults)
+> write_csv(df_1991_adults, "df_1991_adults.csv")
+                                                                                                                                                                                   
+> write_csv(df_1991_summary, "df_1991_summary.csv")
+                                                                                                                                                                                   
+> View(df_2001_cleaned)
+> # Recode age groups in df_2001_cleaned to match 1991 standard bands
+> df_2001_aligned <- df_2001_cleaned %>%
++     mutate(age_group = case_when(
++         age_group %in% c("18 to 19")              ~ "18–19",
++         age_group %in% c("20 to 24")              ~ "20–24",
++         age_group %in% c("25 to 29")              ~ "25–29",
++         age_group %in% c("30 to 34")              ~ "30–34",
++         age_group %in% c("35 to 39")              ~ "35–39",
++         age_group %in% c("40 to 44")              ~ "40–44",
++         age_group %in% c("45 to 49")              ~ "45–49",
++         age_group %in% c("50 to 54")              ~ "50–54",
++         age_group %in% c("55 to 59")              ~ "55–59",
++         age_group %in% c("60 to 64")              ~ "60–64",
++         age_group %in% c("65 to 69")              ~ "65–69",
++         age_group %in% c("70 to 74")              ~ "70–74",
++         age_group %in% c("75 to 79")              ~ "75–79",
++         age_group %in% c("80 to 84")              ~ "80–84",
++         age_group %in% c("85 to 89", "90 and over", "85 and over", "90+", "85+") ~ "85+",
++         TRUE ~ NA_character_  # remove everything else (e.g. 0–17)
++     )) %>%
++     filter(!is.na(age_group))  # Drop anything outside your working age bands
+> View(df_2001_aligned)
+> rm (df_2001_aligned)
+> View(df_2001_cleaned)
+> View(df_2001_clean)
+> View(df_2001_cleaned)
+> # First, restrict to 18+ age groups matching 1991 bands
+> df_2001_filtered <- df_2001_cleaned %>%
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39",
++         "40–44", "45–49", "50–54", "55–59", "60–64",
++         "65–69", "70–74", "75–79", "80–84", "85–89", "90+"
++     )) %>%
++     mutate(
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group)  # collapse oldest into 85+
++     )
+> View(df_2001_filtered)
+> View(df_1991_adults)
+> View(df_2001_filtered)
+> # Then summarise for interpolation
+> df_2001_summary <- df_2001_filtered %>%
++     group_by(year = Date, ward = ward_clean, sex = Sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg),
++         .groups = "drop"
++     )
+> View(df_2001_summary)
+> write_csv(df_2001_summary, "df_2001_summary.csv")
+                                                                                                                                                                                   
+> write_csv(df_2001_adults, "df_2001_adults.csv")
+Error: object 'df_2001_adults' not found
+> library(readxl)
+> 
+> df_2011 <- read_tsv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2011.tsv") 
+Rows: 8800 Columns: 10                                                                                                                                                               
+── Column specification ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Delimiter: "\t"
+chr (7): Population, Units, Sex, Ethnic Grou, 2011 census merged ward, Age, value type
+dbl (2): Date, value
+lgl (1): flag
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+> View(df_2011)
+> View(imd_eng_2004_2007_2010_lsoa01)
+> # Step 2: Filter IMD data to valid LSOAs only
+> imd_2010_filtered <- imd_eng_2004_2007_2010_lsoa01 %>%
++     filter(LSOA %in% valid_lsoas) %>%
++     select(LSOA, imd_score_2010 = X2010IMD.SCORE)
+Error in `select()`:
+! Can't select columns that don't exist.
+✖ Column `X2010IMD.SCORE` doesn't exist.
+Run `rlang::last_trace()` to see where the error occurred.
+> imd_2010_filtered <- imd_eng_2004_2007_2010_lsoa01 %>%
++     filter(LSOA %in% valid_lsoas) %>%
++     select(LSOA, imd_score_2010 = X2010imd_score)
+> View(imd_2010_filtered)
+> View(lsoa_to_ward)
+> imd_by_ward2010 <- lsoa_to_ward %>%
++     left_join(imd_eng_2004_2007_2010_lsoa01, by = c("LSOA" = "LSOA")) %>%
++     group_by(ward) %>%
++     summarise(imd_score_avg = mean(X2010imd_score, na.rm = TRUE)) %>%
++     ungroup()
+> View(imd_by_ward2010)
+> View(df_2001_summary)
+> # Your list of 2011 SLSR wards
+> southwark11 <- c(
++     "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
++     "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
++     "Faraday", "Camberwell Green"
++ )
+> lambeth11 <- c(
++     "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
++     "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
++ )
+> 
+> all_wards_2011 <- c(southwark11, lambeth11)
+> 
+> # Check which are missing from imd_by_ward2010
+> missing_wards <- setdiff(all_wards_2011, imd_by_ward2010$ward)
+> missing_wards
+[1] "Cathedrals"
+> View(imd_by_ward2010)
+> imd_by_ward2010 <- imd_by_ward2010 %>%
++     mutate(ward_clean = str_replace(ward_clean, "Cathedral", "Cathedrals"))
+Error in `mutate()`:
+ℹ In argument: `ward_clean = str_replace(ward_clean, "Cathedral", "Cathedrals")`.
+Caused by error:
+! object 'ward_clean' not found
+Run `rlang::last_trace()` to see where the error occurred.
+> imd_by_ward2010 <- imd_by_ward2010 %>%
++     mutate(ward = str_replace(ward, "Cathedral", "Cathedrals"))
+> # Merge them
+> imd_by_ward2010 <- lsoa_to_ward %>%
++     left_join(imd_eng_2004_2007_2010_lsoa01, by = c("LSOA" = "LSOA")) %>%
++     group_by(ward) %>%
++     summarise(imd_score_avg = mean(X2010imd_score, na.rm = TRUE)) %>%
++     ungroup()
+> imd_by_ward2010 <- imd_by_ward2010 %>%
++     mutate(ward = str_replace(ward, "Cathedral", "Cathedrals"))
+> # Check they are represented
+> # Your list of 2011 SLSR wards
+> southwark11 <- c(
++     "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
++     "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
++     "Faraday", "Camberwell Green"
++ )
+> lambeth11 <- c(
++     "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
++     "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
++ )
+> 
+> all_wards_2011 <- c(southwark11, lambeth11)
+> 
+> # Check which are missing from imd_by_ward2010
+> missing_wards <- setdiff(all_wards_2011, imd_by_ward2010$ward)
+> missing_wards
+character(0)
+> View(df_2001_filtered)
+> View(df_2001_summary)
+> # Define SLSR wards for 2001
+> southwark01 <- c(
++     "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
++     "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
++     "Faraday", "Camberwell Green"
++ )
+> lambeth01 <- c(
++     "Bishop`s", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
++     "Herne Hill", "Larkhall", "Oval", "Prince`s", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
++ )
+> valid_wards_2001 <- c(southwark01, lambeth01)
+> 
+> # Filter to valid SLSR wards only
+> df_2001_summary <- df_2001_summary %>%
++     filter(ward_clean %in% valid_wards_2001)
+Error in `filter()`:
+ℹ In argument: `ward_clean %in% valid_wards_2001`.
+Caused by error:
+! object 'ward_clean' not found
+Run `rlang::last_trace()` to see where the error occurred.
+> # Filter to valid SLSR wards only
+> df_2001_summary <- df_2001_summary %>%
++     filter(ward %in% valid_wards_2001)
+> df_2001_aldults <- df_2001_summary
+> write_csv(df_2001_aldults , "df_2001_aldults .csv")
+                                                                                                                                                                                   
+> View(imd_by_ward2010)
+> View(df_2011)
+> df_2011_clean <- df_2011 %>%
++     mutate(
++         ward_clean = str_trim(str_remove(`2011 census merged ward`, "^.*:\\s*")),
++         
++         # Fix naming inconsistency (like we did before)
++         ward_clean = if_else(ward_clean == "Cathedrals", "Cathedrals", ward_clean)
++     )
+> View(df_2011_clean)
+> df_2011_with_imd <- df_2011_clean %>%
++     left_join(imd_by_ward2010, by = c("ward_clean" = "ward"))
+> View(df_2001_with_imd)
+> df_2011_with_imd %>%
++     filter(is.na(imd_score_avg)) %>%
++     distinct(ward_clean)
+# A tibble: 0 × 1
+# ℹ 1 variable: ward_clean <chr>
+> df_2011_with_ethnicity <- df_2011_with_imd %>%
++     filter(!str_detect(`Ethnic group`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     mutate(
++         ethnicity = str_trim(`Ethnic group`),
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+Error in `filter()`:
+ℹ In argument: `!str_detect(`Ethnic group`, "All categories")`.
+Caused by error:
+! object 'Ethnic group' not found
+Run `rlang::last_trace()` to see where the error occurred.
+> library(dplyr)
+> library(stringr)
+> 
+> df_2011_with_ethnicity <- df_2011 %>%
++     # Remove totals
++     filter(!str_detect(`Ethnic Grou`, "All categories")) %>%
++     
++     # Clean ethnicity column and group
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black Other|Black/Black British: Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2001_with_ethnicity)
+> View(df_2001_aldults)
+> df_2011_with_ethnicity <- df_2011 %>%
++     # Remove totals
++     filter(!str_detect(`Ethnic Grou`, "All categories")) %>%
++     
++     # Clean ethnicity column and group
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black/Black British: Other") ~ "Black Other",  # <- updated line
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2011_with_ethnicity)
+> df_2011_with_ethnicity <- df_2011 %>%
++     # Remove totals
++     filter(!str_detect(`Ethnic Grou`, "All categories")) %>%
++     
++     # Clean ethnicity column and group
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, regex("White", ignore_case = TRUE)) ~ "White",
++             str_detect(ethnicity, regex("African$", ignore_case = TRUE)) ~ "Black African",
++             str_detect(ethnicity, regex("Caribbean$", ignore_case = TRUE)) ~ "Black Caribbean",
++             str_detect(ethnicity, regex("Black British: Other|Other$", ignore_case = TRUE)) ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2001_with_ethnicity)
+> df_2001_with_ethnicity <- df_2001_with_imd %>%
++     # Remove "All categories" from ethnicity and age
++     filter(!str_detect(`Ethnic Grou`, "All categories"),
++            !str_detect(Age, "All categories")) %>%
++     
++     # Clean ethnicity
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black British: Other|Black/Black British: Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> 
+> # Clean ages
+> df_2001_cleaned <- df_2001_with_ethnicity %>%
++     mutate(
++         # Remove "Age " prefix
++         age_group = str_replace(Age, "^Age ", ""),
++         
++         # Replace " to " with en dash
++         age_group = str_replace_all(age_group, " to ", "–"),
++         
++         # Convert "85 and over" or similar to "85+"
++         age_group = str_replace(age_group, " and over", "+"),
++         
++         # Clean whitespace
++         age_group = str_trim(age_group)
++     )
+> 
+> # Recode age groups in df_2001_cleaned to match 1991 standard bands
+> df_2001_filtered <- df_2001_cleaned %>%
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39",
++         "40–44", "45–49", "50–54", "55–59", "60–64",
++         "65–69", "70–74", "75–79", "80–84", "85–89", "90+"
++     )) %>%
++     mutate(
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group)  # collapse oldest into 85+
++     )
+> 
+> 
+> # Then summarise for interpolation
+> df_2001_summary <- df_2001_filtered %>%
++     group_by(year = Date, ward = ward_clean, sex = Sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg),
++         .groups = "drop"
++     )
+> write_csv(df_2001_summary, "df_2001_summary.csv")
+                                                                                                                                                                                   
+> # Filter to valid SLSR wards only
+> df_2001_summary <- df_2001_summary %>%
++     filter(ward %in% valid_wards_2001)
+> 
+> 
+> df_2001_aldults <- df_2001_summary
+> View(df_2001_aldults)
+> write_csv(df_2001_aldults , "df_2001_aldults .csv")
+                                                                                                                                                                                   
+> df_2011_cleaned <- df_2011_with_ethnicity %>%
++     mutate(
++         age_group = str_replace(Age, "^Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+"),
++         age_group = str_trim(age_group)
++     ) %>%
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39",
++         "40–44", "45–49", "50–54", "55–59", "60–64",
++         "65–69", "70–74", "75–79", "80–84", "85–89", "90+"
++     )) %>%
++     mutate(
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group)
++     )
+> View(df_2011_cleaned)
+> View(df_2001_with_ethnicity)
+> df_2011_cleaned <- df_2011_with_ethnicity %>%
++     mutate(
++         age_group = str_replace(Age, "^Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+"),
++         age_group = str_trim(age_group),
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group)
++     ) %>%
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39",
++         "40–44", "45–49", "50–54", "55–59", "60–64",
++         "65–69", "70–74", "75–79", "80–84", "85+"
++     ))
+> View(df_2011_cleaned)
+> View(df_1991_adults)
+> View(df_2001_aldults)
+> View(df_2011_cleaned)
+> # Define 2011 SLSR wards
+> lambeth11 <- c(
++     "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
++     "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
++ )
+> southwark11 <- c(
++     "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
++     "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
++     "Faraday", "Camberwell Green"
++ )
+> 
+> valid_wards_2011 <- c(lambeth11, southwark11)
+> 
+> # Apply the filter
+> df_2011_cleaned <- df_2011_cleaned %>%
++     filter(ward_clean %in% valid_wards_2011)
+Error in `filter()`:
+ℹ In argument: `ward_clean %in% valid_wards_2011`.
+Caused by error:
+! object 'ward_clean' not found
+Run `rlang::last_trace()` to see where the error occurred.
+> View(df_2011_cleaned)
+> View(df_2011_clean)
+> View(df_2011_with_imd)
+> View(df_2011_cleaned)
+> View(df_2011_clean)
+> View(df_2011_with_imd)
+> df_2011_with_ethnicity <- df_2011_with_imd %>%
++     # Remove totals
++     filter(!str_detect(`Ethnic Grou`, "All categories")) %>%
++     
++     # Clean ethnicity column and group
++     mutate(
++         ethnicity = str_trim(str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, regex("White", ignore_case = TRUE)) ~ "White",
++             str_detect(ethnicity, regex("African$", ignore_case = TRUE)) ~ "Black African",
++             str_detect(ethnicity, regex("Caribbean$", ignore_case = TRUE)) ~ "Black Caribbean",
++             str_detect(ethnicity, regex("Black British: Other|Other$", ignore_case = TRUE)) ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     )
+> View(df_2011_with_ethnicity)
+> df_2011_cleaned <- df_2011_with_ethnicity %>%
++     mutate(
++         age_group = str_replace(Age, "^Age ", ""),
++         age_group = str_replace_all(age_group, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+"),
++         age_group = str_trim(age_group),
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group)
++     ) %>%
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39",
++         "40–44", "45–49", "50–54", "55–59", "60–64",
++         "65–69", "70–74", "75–79", "80–84", "85+"
++     ))
+> View(df_2011_cleaned)
+> # 6.Filter to valid SLSR wards
+> # Define 2011 SLSR wards
+> lambeth11 <- c(
++     "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
++     "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
++ )
+> southwark11 <- c(
++     "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
++     "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
++     "Faraday", "Camberwell Green"
++ )
+> 
+> valid_wards_2011 <- c(lambeth11, southwark11)
+> 
+> # Apply the filter
+> df_2011_cleaned <- df_2011_cleaned %>%
++     filter(ward_clean %in% valid_wards_2011)
+> # Combine all valid wards
+> valid_wards_2011 <- c(lambeth11, southwark11)
+> 
+> # Check which wards from your list are missing in the dataset
+> missing_wards_2011 <- setdiff(valid_wards_2011, unique(df_2011_cleaned$ward_clean))
+> 
+> # Print missing wards
+> missing_wards_2011
+character(0)
+> df_2011_summary <- df_2011_cleaned %>%
++     group_by(year = Date, ward = ward_clean, sex = Sex, ethnicity_grouped, age_group) %>%
++     summarise(
++         pop_count = sum(value, na.rm = TRUE),
++         imd_score = first(imd_score_avg),
++         .groups = "drop"
++     )
+> View(df_2011_summary)
+> # Save it
+> write_csv(df_2011_summary, "df_2011_summary.csv")
+                                                                                                                                                                                   
+> df_2011_adults <- df_2011_summary
+> 
+> # === Cleaning 2021 Census ===
+> 
+> library(readxl)
+> library(dplyr)
+> library(stringr)
+> library(tidyr)
+> library(readr)
+> 
+> # Load census and IMD datasets
+> df_2021 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/2021.xlsx")
+                                                                                                                                                                                   
+> View(df_2021)
+> IMD2019 <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD calculations/IMD2019.xlsx")
+                                                                                                                                                                                   
+> View(IMD2019)
+> # Combine all valid 2021 wards
+> all_wards_2021 <- c(
++     "Borough & Bankside", "Camberwell Green", "Chaucer", "Faraday",
++     "London Bridge & West Bermondsey", "Newington (Southwark)", "North Bermondsey",
++     "North Walworth", "Old Kent Road", "Rotherhithe",
++     "South Bermondsey", "St George's (Southwark)", "Surrey Docks",
++     "Waterloo & South Bank", "Vauxhall (Lambeth)", "Kennington (Lambeth)", "Oval",
++     "Stockwell West & Larkhall", "Stockwell East", "Myatt's Fields", "Clapham Town",
++     "Clapham East", "Clapham Common & Abbeville", "Brixton Acre Lane", "Brixton North",
++     "Brixton Rush Common", "Clapham Park", "Brixton Windrush",
++     "Herne Hill & Loughborough Junction", "St Martin's (Lambeth)"
++ )
+> df_2021_cleaned <- df_2021 %>%
++     rename(
++         ward = `Electoral wards and divisions`,
++         sex = `Sex (2 categories)`,
++         age = `Age (86 categories)`,
++         ethnicity = `Ethnic group (20 categories)`,
++         pop_count = Observation
++     ) %>%
++     filter(ward %in% all_wards_2021) %>%
++     mutate(
++         # Clean age to match previous format
++         age_group = str_replace_all(age, " to ", "–"),
++         age_group = str_replace(age_group, " and over", "+"),
++         age_group = str_trim(age_group),
++         age_group = if_else(age_group %in% c("85–89", "90+"), "85+", age_group),
++         
++         # Group ethnicity
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black.*Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     ) %>%
++     # Keep adults only (18+)
++     filter(age_group %in% c(
++         "18–19", "20–24", "25–29", "30–34", "35–39", "40–44", "45–49",
++         "50–54", "55–59", "60–64", "65–69", "70–74", "75–79", "80–84", "85+"
++     ))
+Error in `rename()`:
+! Can't rename columns that don't exist.
+✖ Column `Age (86 categories)` doesn't exist.
+Run `rlang::last_trace()` to see where the error occurred.
+> View(df_2021)
+> # Define mapping from single ages to age groups
+> map_age_to_group <- function(age_code) {
++     age_code <- as.numeric(age_code)
++     case_when(
++         age_code >= 18 & age_code <= 19 ~ "18–19",
++         age_code >= 20 & age_code <= 24 ~ "20–24",
++         age_code >= 25 & age_code <= 29 ~ "25–29",
++         age_code >= 30 & age_code <= 34 ~ "30–34",
++         age_code >= 35 & age_code <= 39 ~ "35–39",
++         age_code >= 40 & age_code <= 44 ~ "40–44",
++         age_code >= 45 & age_code <= 49 ~ "45–49",
++         age_code >= 50 & age_code <= 54 ~ "50–54",
++         age_code >= 55 & age_code <= 59 ~ "55–59",
++         age_code >= 60 & age_code <= 64 ~ "60–64",
++         age_code >= 65 & age_code <= 69 ~ "65–69",
++         age_code >= 70 & age_code <= 74 ~ "70–74",
++         age_code >= 75 & age_code <= 79 ~ "75–79",
++         age_code >= 80 & age_code <= 84 ~ "80–84",
++         age_code >= 85 ~ "85+",
++         TRUE ~ NA_character_
++     )
++ }
+> df_2021_cleaned <- df_2021 %>%
++     rename(
++         ward = `Electoral wards and divisions`,
++         sex = `Sex (2 categories)`,
++         age_code = `Age (86 categories) Code`,
++         ethnicity = `Ethnic group (20 categories)`,
++         pop_count = Observation
++     ) %>%
++     filter(ward %in% all_wards_2021) %>%
++     mutate(
++         age_group = map_age_to_group(age_code),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "Black African") ~ "Black African",
++             str_detect(ethnicity, "Black Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "Black.*Other") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     ) %>%
++     filter(!is.na(age_group))
+> 
+> View(df_2021_cleaned)
+> df_2021_cleaned <- df_2021 %>%
++     rename(
++         ward = `Electoral wards and divisions`,
++         sex = `Sex (2 categories)`,
++         age_code = `Age (86 categories) Code`,
++         ethnicity = `Ethnic group (20 categories)`,
++         pop_count = Observation
++     ) %>%
++     filter(ward %in% all_wards_2021) %>%
++     mutate(
++         age_group = map_age_to_group(age_code),
++         
++         ethnicity_grouped = case_when(
++             str_detect(ethnicity, "White") ~ "White",
++             str_detect(ethnicity, "African: African") ~ "Black African",
++             str_detect(ethnicity, "African: Caribbean") ~ "Black Caribbean",
++             str_detect(ethnicity, "African: Other Black") ~ "Black Other",
++             TRUE ~ "Other"
++         )
++     ) %>%
++     filter(!is.na(age_group))
+> View(df_2011_adults)
+> View(df_2021_cleaned)
+# Merge IMD
+df_2021_ready <- df_2021_cleaned %>%
+  left_join(IMD2019 %>% select(`Ward Name`, `IMD average score`), by = c("ward" = "Ward Name")) %>%
+  rename(imd_score = `IMD average score`) %>%
+  mutate(year = 2021)
+
+# Summarise
+df_2021_summary <- df_2021_ready %>%
+  group_by(year = 2021, ward = ward, sex = sex, ethnicity_grouped, age_group) %>%
+  summarise(
+    pop_count = sum(pop_count, na.rm = TRUE),
+    imd_score = first(imd_score),
+    .groups = "drop"
+  )
+# Save it
+write_csv(df_2021_summary, "df_2021_summary.csv")
+
+
+# Keep only the summaries
+names(df_1991_adults)
+names(df_2001_aldults_)
+names(df_2011_adults)
+names(df_2021_adults)
+
+# And rename them
+df_1991_adults <- df_1991_adults %>%
+  rename(
+    year = Date,
+    ward = ward_clean
+  )
+
+df_1991_adults <- df_1991_adults %>%
+  mutate(sex = case_when(
+    sex == "Males" ~ "Male",
+    sex == "Females" ~ "Female",
+    TRUE ~ sex
+  ))
+
+df_2001_aldults_ <- df_2001_aldults_ %>%
+  mutate(sex = case_when(
+    sex == "Males" ~ "Male",
+    sex == "Females" ~ "Female",
+    TRUE ~ sex
+  ))
+
+df_2011_adults <- df_2011_adults %>%
+  mutate(sex = case_when(
+    sex == "Males" ~ "Male",
+    sex == "Females" ~ "Female",
+    TRUE ~ sex
+  ))
+
+# Stack them into one long dataset
+df_all <- bind_rows(df_1991_adults, df_2001_aldults_, df_2011_adults, df_2021_adults)
