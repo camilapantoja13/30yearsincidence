@@ -418,32 +418,32 @@ slsr_clean_icd10 <- slsr_clean_icd10 %>%
     TRUE ~ NA_character_
   ))
 
-# Add population
-population_by_ethnicity <- read_csv("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/population_by_ethnicity.csv")
+# Add the population
+pop_full_interpolated_with_imd <- read.csv("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD checked_v2/pop_full_interpolated_with_imd.csv")
+View(pop_full_interpolated_with_imd)
 
-library(dplyr)
-
-# Define main groups
-pop_summary <- population_by_ethnicity %>%
-  filter(Year >= 1995 & Year <= 2024) %>%
+# New pop_summary
+# Step 1: Summarise person-years
+new_pop_summary <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
   mutate(ethnicity_group = case_when(
-    Ethnicity == "White" ~ "White",
-    Ethnicity == "Black Caribbean" ~ "Black Caribbean",
-    Ethnicity == "Black African" ~ "Black African",
-    Ethnicity %in% c("Black Other", "Other") ~ "Other",
+    ethnicity_grouped == "White" ~ "White",
+    ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+    ethnicity_grouped == "Black African" ~ "Black African",
+    ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
     TRUE ~ NA_character_
   )) %>%
   filter(!is.na(ethnicity_group)) %>%
   group_by(ethnicity_group) %>%
-  summarise(person_years = round(sum(Total, na.rm = TRUE), 1), .groups = "drop")
+  summarise(person_years = round(sum(pop_count_interp, na.rm = TRUE), 1), .groups = "drop")
 
-# Add overall total
-overall_py <- pop_summary %>%
+# Step 2: Add overall total
+overall_py_new <- new_pop_summary %>%
   summarise(person_years = sum(person_years)) %>%
   mutate(ethnicity_group = "All")
 
-# Final table
-pop_summary <- bind_rows(overall_py, pop_summary)
+# Combine
+new_pop_summary <- bind_rows(overall_py_new, new_pop_summary)
 
 # Total strokes per ethnicity
 total_strokes <- slsr_clean_icd10 %>%
@@ -463,6 +463,44 @@ overall_strokes <- total_strokes %>%
   mutate(ethnicity_group = "All")
 
 total_strokes <- bind_rows(overall_strokes, total_strokes)
+
+# Stroke subtype distribution
+subtype_distribution <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  count(ethnicity_group, stroke_type) %>%
+  group_by(ethnicity_group) %>%
+  mutate(
+    percent = round(100 * n / sum(n), 1),
+    label = paste0(percent, "%")
+  ) %>%
+  ungroup()
+
+# Add overall
+overall_subtype <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
+  count(stroke_type) %>%
+  mutate(
+    ethnicity_group = "All",
+    percent = round(100 * n / sum(n), 1),
+    label = paste0(percent, "%")
+  )
+
+subtype_distribution <- bind_rows(subtype_distribution, overall_subtype)
+
+# Recalculate incidence rates with new population
+incidence_rates_new <- subtype_distribution %>%
+  select(ethnicity_group, stroke_type, n) %>%
+  left_join(new_pop_summary, by = "ethnicity_group") %>%
+  mutate(rate_per_100k = round(n / person_years * 100000, 1)) %>%
+  select(ethnicity_group, stroke_type, rate_per_100k)
 
 # Mean age at first stroke
 age_summary <- slsr_clean_icd10 %>%
@@ -496,9 +534,18 @@ age_all <- slsr_clean_icd10 %>%
 age_summary <- bind_rows(age_all, age_summary) %>%
   select(ethnicity_group, age_label)
 
-# Stroke subtype distribution
-subtype_distribution <- slsr_clean_icd10 %>%
-  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
+
+## Summarise in a table
+library(dplyr)
+library(tidyr)
+
+# Person-years
+person_years_wide <- new_pop_summary %>%
+  pivot_wider(names_from = ethnicity_group, values_from = person_years) %>%
+  mutate(Measure = "Source population (person-years)")
+
+# Total strokes by ethnicity group
+total_strokes <- slsr_clean_icd10 %>%
   mutate(ethnicity_group = case_when(
     eth6cat == 1 ~ "White",
     eth6cat == 2 ~ "Black Caribbean",
@@ -507,128 +554,61 @@ subtype_distribution <- slsr_clean_icd10 %>%
     TRUE ~ NA_character_
   )) %>%
   filter(!is.na(ethnicity_group)) %>%
-  count(ethnicity_group, stroke_type) %>%
-  group_by(ethnicity_group) %>%
-  mutate(
-    percent = round(100 * n / sum(n), 1),
-    label = paste0(percent, "%")
-  ) %>%
-  ungroup()
+  count(ethnicity_group, name = "stroke_total")
 
-# Add overall
-overall_subtype <- slsr_clean_icd10 %>%
-  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
-  count(stroke_type) %>%
-  mutate(
-    ethnicity_group = "All",
-    percent = round(100 * n / sum(n), 1),
-    label = paste0(percent, "%")
-  )
+# Add overall total
+overall_strokes <- total_strokes %>%
+  summarise(stroke_total = sum(stroke_total)) %>%
+  mutate(ethnicity_group = "All")
 
-subtype_distribution <- bind_rows(subtype_distribution, overall_subtype)
+# Combine
+total_strokes <- bind_rows(overall_strokes, total_strokes)
 
-# Per 100,000
-incidence_rates <- subtype_distribution %>%
-  select(ethnicity_group, stroke_type, n) %>%
-  left_join(pop_summary, by = "ethnicity_group") %>%
-  mutate(rate_per_100k = round(n / person_years * 100000, 1)) %>%
-  select(ethnicity_group, stroke_type, rate_per_100k)
-
-# -- Format the table --
-
-# Pivot each component to wide format
-library(tidyr)
-library(dplyr)
-
-# 1. Person-years
-person_years_wide <- pop_summary %>%
-  pivot_wider(names_from = ethnicity_group, values_from = person_years) %>%
-  mutate(Measure = "Source population (person-years)")
-
-# 2. Total strokes
+# Pivot to wide format for the summary table
 total_strokes_wide <- total_strokes %>%
   pivot_wider(names_from = ethnicity_group, values_from = stroke_total) %>%
-  mutate(Measure = "Total strokes")
+  mutate(Measure = "All strokes") %>%
+  select(Measure, All, White, `Black African`, `Black Caribbean`, Other)
 
-# 3. Age at first stroke
+# Age at first stroke
 age_summary_wide <- age_summary %>%
   pivot_wider(names_from = ethnicity_group, values_from = age_label) %>%
   mutate(Measure = "Age at first stroke (mean ± SD)")
 
-# 4. Stroke subtype distribution (%)
-subtype_distribution_wide <- subtype_distribution %>%
-  select(ethnicity_group, stroke_type, label) %>%
-  pivot_wider(names_from = ethnicity_group, values_from = label) %>%
+# Stroke subtype n (%)
+subtype_formatted <- subtype_distribution %>%
+  mutate(label_n = paste0(n, " (", label, ")")) %>%
+  select(ethnicity_group, stroke_type, label_n) %>%
+  pivot_wider(names_from = ethnicity_group, values_from = label_n) %>%
   mutate(Measure = paste0("Subtype – ", stroke_type)) %>%
   select(-stroke_type)
 
-# 5. Stroke incidence rates
-incidence_rates_wide <- incidence_rates %>%
+# Crude incidence
+incidence_formatted <- incidence_rates_new %>%
   pivot_wider(names_from = ethnicity_group, values_from = rate_per_100k) %>%
   mutate(Measure = paste0("Incidence – ", stroke_type)) %>%
   select(-stroke_type)
 
-# 6. Combine all rows
-# Function to coerce all but the Measure column to character
-coerce_all_to_char <- function(df) {
+# Combine and order
+# Helper: Convert all columns except Measure to character
+coerce_to_char <- function(df) {
   df %>%
     mutate(across(-Measure, as.character))
 }
 
-# Apply this to each table before combining
-final_summary_table <- bind_rows(
-  coerce_all_to_char(person_years_wide),
-  coerce_all_to_char(total_strokes_wide),
-  coerce_all_to_char(age_summary_wide),
-  coerce_all_to_char(subtype_distribution_wide),
-  coerce_all_to_char(incidence_rates_wide)
+# Apply fix and combine
+crude_summary_table <- bind_rows(
+  coerce_to_char(person_years_wide),
+  coerce_to_char(total_strokes_wide),
+  coerce_to_char(age_summary_wide),
+  coerce_to_char(subtype_formatted),
+  coerce_to_char(incidence_formatted)
 ) %>%
-  select(Measure, All, White, `Black Caribbean`, `Black African`, Other)
+  select(Measure, All, White, `Black African`, `Black Caribbean`, Other)
 
-writexl::write_xlsx(final_summary_table, "table1_summary_ethnicity.xlsx")
+write_xlsx(crude_summary_table, "crude_summary_table.xlsx")
 
-# Adding n to subtypes
-# Get n and % per stroke subtype per ethnicity group
-subtype_n_pct <- slsr_clean_icd10 %>%
-  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
-  mutate(ethnicity_group = case_when(
-    eth6cat == 1 ~ "White",
-    eth6cat == 2 ~ "Black Caribbean",
-    eth6cat == 3 ~ "Black African",
-    eth6cat %in% c(4, 5) ~ "Other",
-    TRUE ~ NA_character_
-  )) %>%
-  filter(!is.na(ethnicity_group)) %>%
-  group_by(ethnicity_group, stroke_type) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  group_by(ethnicity_group) %>%
-  mutate(pct = round(100 * n / sum(n), 1),
-         label = paste0(n, " (", pct, "%)")) %>%
-  ungroup()
 
-# Add "All" total
-subtype_all <- slsr_clean_icd10 %>%
-  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
-  group_by(stroke_type) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  mutate(
-    ethnicity_group = "All"
-  ) %>%
-  group_by(ethnicity_group) %>%
-  mutate(pct = round(100 * n / sum(n), 1),
-         label = paste0(n, " (", pct, "%)")) %>%
-  ungroup()
-
-# Combine and pivot to wide
-subtype_n_pct_final <- bind_rows(subtype_n_pct, subtype_all) %>%
-  select(ethnicity_group, stroke_type, label) %>%
-  tidyr::pivot_wider(
-    names_from = ethnicity_group,
-    values_from = label
-  ) %>%
-  rename(Measure = stroke_type)
-
-writexl::write_xlsx(subtype_n_pct_final, "subtype_n_pct_final.xlsx")
 
 # ------------------------------------------------------------------
 # Table 2
