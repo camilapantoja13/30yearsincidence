@@ -307,6 +307,101 @@ slsr_clean_icd10 <- slsr_clean_icd10 %>%
   ) %>%
   select(-corrected_eth6cat)  # Remove the temporary column
 
+# Now lets check White people
+# Standarise Id format
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id))
+
+SES_inequality_Dec_24 <- SES_inequality_Dec_24 %>%
+  mutate(id = as.character(id))
+
+# Extract IDs labeled White in both
+ids_white_old <- slsr_clean_icd10 %>%
+  filter(strk_y == 1995, eth6cat == 1) %>%
+  pull(id)
+
+ids_white_new <- SES_inequality_Dec_24 %>%
+  filter(strk_y == 1995, eth6cat == 1) %>%
+  pull(id)
+
+# Compare them
+setdiff(ids_white_old, ids_white_new)
+setdiff(ids_white_new, ids_white_old)
+
+# I'm re-writing the eth6cat of my dataset with Eva's
+# Check IDs match
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id))
+SES_inequality_Dec_24 <- SES_inequality_Dec_24 %>%
+  mutate(id = as.character(id))
+
+# Join and overwrite
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(SES_inequality_Dec_24 %>% select(id, corrected_eth6cat = eth6cat), by = "id") %>%
+  mutate(
+    eth6cat = if_else(!is.na(corrected_eth6cat), corrected_eth6cat, eth6cat)
+  ) %>%
+  select(-corrected_eth6cat)
+
+# There are some patients that have no stroke classification on my dataset, so lets check if they have classification on Eva's
+slsr_clean_icd10 %>%
+  count(stroke_type) %>%
+  filter(!stroke_type %in% c("Ischaemic", "PICH", "SAH"))
+
+# Identify the 632 stroke cases from the dataset
+unknown_ids <- slsr_clean_icd10 %>%
+  filter(stroke_type == "Unknown") %>%
+  pull(id)
+
+# Filter Eva's dataset for matching IDs
+eva_classified <- SES_inequality_Dec_24 %>%
+  filter(id %in% unknown_ids) %>%
+  mutate(
+    resolved_stroke_type = case_when(
+      strksub == 1 ~ "Ischaemic",
+      strksub == 2 ~ "PICH",
+      strksub == 3 ~ "SAH",
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Count how many can be resolved
+eva_classified %>%
+  count(resolved_stroke_type)
+
+# Lets resolve these:
+# Keep only the resolved cases (not Unknown)
+resolved_updates <- eva_classified %>%
+  filter(resolved_stroke_type != "Unknown") %>%
+  select(id, resolved_stroke_type)
+
+# Update stroke_type in slsr_clean_icd10
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(resolved_updates, by = "id") %>%
+  mutate(
+    stroke_type = if_else(!is.na(resolved_stroke_type), resolved_stroke_type, stroke_type)
+  ) %>%
+  select(-resolved_stroke_type)  # clean up temporary column
+
+# Count how many unknown
+slsr_clean_icd10 %>%
+  count(stroke_type) %>%
+  filter(!stroke_type %in% c("Ischaemic", "PICH", "SAH"))
+
+# Lets try solving them
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(
+    stroke_type = case_when(
+      stroke_type != "Unknown" ~ stroke_type,  # keep existing classifications
+      subtype %in% 1:5 ~ "Ischaemic",          # OCSP ischaemic
+      subtype == 6     ~ "PICH",
+      subtype == 7     ~ "SAH",
+      strksub == 1     ~ "Ischaemic",          # strksub = 1: infarction
+      strksub == 2     ~ "PICH",               # primary intracerebral
+      strksub == 3     ~ "SAH",
+      TRUE             ~ "Unknown"             # unresolved stays as Unknown
+    )
+  )
 
 # ------------------------------------------------------------------
 # Table 1
@@ -577,44 +672,79 @@ population_period_age_ethnicity <- population_age_ethnicity %>%
   group_by(period, ethnicity, age_group) %>%
   summarise(population = sum(population), .groups = "drop")
 
+
+# Im changing the name of slsr_clean_icd10 to slsr_clean for reusing the previous code
+slsr_clean_raw <- slsr_clean
+rm (slsr_clean)
+slsr_clean <- slsr_clean_icd10
+
 # Prepare SLSR Stroke Data 
 slsr_clean <- slsr_clean %>%
   mutate(
     age_group = case_when(
-      age >= 20 & age <= 24 ~ "20-24",
-      age >= 25 & age <= 29 ~ "25-29",
-      age >= 30 & age <= 34 ~ "30-34",
-      age >= 35 & age <= 39 ~ "35-39",
-      age >= 40 & age <= 44 ~ "40-44",
-      age >= 45 & age <= 49 ~ "45-49",
-      age >= 50 & age <= 54 ~ "50-54",
-      age >= 55 & age <= 59 ~ "55-59",
-      age >= 60 & age <= 64 ~ "60-64",
-      age >= 65 & age <= 69 ~ "65-69",
-      age >= 70 & age <= 74 ~ "70-74",
-      age >= 75 ~ "75+",
+      age >= 18 & age < 20 ~ "18-19",
+      age >= 20 & age < 25 ~ "20-24",
+      age >= 25 & age < 30 ~ "25-29",
+      age >= 30 & age < 35 ~ "30-34",
+      age >= 35 & age < 40 ~ "35-39",
+      age >= 40 & age < 45 ~ "40-44",
+      age >= 45 & age < 50 ~ "45-49",
+      age >= 50 & age < 55 ~ "50-54",
+      age >= 55 & age < 60 ~ "55-59",
+      age >= 60 & age < 65 ~ "60-64",
+      age >= 65 & age < 70 ~ "65-69",
+      age >= 70 & age < 75 ~ "70-74",
+      age >= 75            ~ "75+",
       TRUE ~ NA_character_
     )
   )
 
+
 #  ESP Standard Population Weights 
-esp <- tibble(
+esp <- tibble::tibble(
   age_group = c(
-    "20-24", "25-29", "30-34", "35-39", "40-44", "45-49",
-    "50-54", "55-59", "60-64", "65-69", "70-74", "75+"
+    "18-19", "20-24", "25-29", "30-34", "35-39", "40-44",
+    "45-49", "50-54", "55-59", "60-64", "65-69", "70-74", "75+"
   ),
   std_pop = c(
-    6000, 6000, 6500, 7000, 7000, 7000,
-    7000, 6500, 6000, 5500, 5000, 4000 + 2500 + 2500 # summed 75-79 + 80-84 + 85+
+    2200,   # approximated from ESP 15–19
+    6000,
+    6000,
+    6500,
+    7000,
+    7000,
+    7000,
+    7000,
+    6500,
+    6000,
+    5500,
+    5000,
+    9000    # 75–79 + 80–84 + 85+
   )
 )
 
+# Addint periods to SLSR
+slsr_clean <- slsr_clean %>%
+  mutate(
+    period = case_when(
+      strk_y %in% 1995:1999 ~ "1995-1999",
+      strk_y %in% 2000:2004 ~ "2000-2004",
+      strk_y %in% 2005:2009 ~ "2005-2009",
+      strk_y %in% 2010:2014 ~ "2010-2014",
+      strk_y %in% 2015:2019 ~ "2015-2019",
+      strk_y %in% 2020:2024 ~ "2020-2024",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(period))
+
 # Count Stroke Cases by Group 
 stroke_cases_age <- slsr_clean %>%
-  filter(stroke_class %in% c("Ischaemic", "PICH", "SAH")) %>%
+  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
   filter(!is.na(age_group)) %>%
-  group_by(period, ethnicity, age_group, stroke_class) %>%
-  summarise(n = n(), .groups = "drop")
+  group_by(period, ethnicity, age_group, stroke_type) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  rename(stroke_class = stroke_type) 
 
 # Start from subtype counts
 stroke_cases_all <- stroke_cases_age %>%
@@ -736,126 +866,56 @@ esp_asir_clean <- esp_asir_summary %>%
     "2010-2014", "2015-2019", "2020-2024"
   )))
 
-
 plot_stroke_trend_clean <- function(stroke_type) {
-  # Color palette with "Other"
-  nice_colors <- c(
-    "Black African"    = "#e64173",   # Pink
-    "Black Caribbean"  = "#7b3294",   # Purple
-    "White"            = "#1a9850",   # Green
-    "Other"            = "#fdb863"    # Soft Orange
-  )
-  
-  # Updated shape palette with "Other"
-  nice_shapes <- c(
-    "Black African"    = 16,  # filled circle
-    "Black Caribbean"  = 17,  # triangle
-    "White"            = 15,  # square
-    "Other"            = 18   # diamond
+  # Define custom y-axis limits per stroke type
+  y_limits <- switch(
+    stroke_type,
+    "Total strokes" = c(0, 500),
+    "Ischaemic"     = c(0, 400),
+    "PICH"          = c(0, 100),
+    "SAH"           = c(0, 30),
+    c(0, 500)  # default fallback
   )
 
-  esp_asir_clean %>%
-    filter(
-      stroke_class == stroke_type,
-      !ethnicity %in% c("Overall", "Black Other"),  # Still excluding "Black Other"
-      !is.na(asir)
-    ) %>%
-    mutate(
-      period = factor(
-        period,
-        levels = c("1995-1999", "2000-2004", "2005-2009", 
-                   "2010-2014", "2015-2019", "2020-2024")
-      )
-    ) %>%
-    ggplot(aes(x = period, y = asir, group = ethnicity, color = ethnicity, shape = ethnicity)) +
-    geom_line(size = 1.5) +
-    geom_point(size = 3.5) +
-    geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), 
-                  width = 0.2, size = 0.6, alpha = 0.5) +
-    scale_color_manual(values = nice_colors) +
-    scale_shape_manual(values = nice_shapes) +
-    labs(
-      title = paste("ESP-Standardised Incidence Rates:", stroke_type),
-      subtitle = "95% Confidence Intervals by Ethnicity",
-      x = "Time Period",
-      y = "Incidence Rate per 100,000",
-      color = "Ethnicity",
-      shape = "Ethnicity"
-    ) +
-    theme_minimal(base_size = 14) +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
-      plot.subtitle = element_text(hjust = 0.5, size = 12),
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      legend.position = "bottom",
-      legend.title = element_text(face = "bold"),
-      panel.grid.minor = element_blank(),
-      panel.grid.major.x = element_blank()
-    )
-}
-
-plot_stroke_trend_clean("Total strokes")
-plot_stroke_trend_clean("Ischaemic")
-plot_stroke_trend_clean("PICH")
-plot_stroke_trend_clean("SAH")
-
-# "Other" is being an outlier in PICH and SAH, so lets check it
-
-# Filter just "Other" group
-other_check <- stroke_cases_all %>%
-  filter(ethnicity == "Other") %>%
-  left_join(population_period_age_ethnicity_all, 
-            by = c("period", "ethnicity", "age_group")) %>%
-  filter(stroke_class %in% c("PICH", "SAH")) %>%
-  arrange(stroke_class, period, age_group)
-
-# View
-View(other_check)
-
-# Problem is that for PICH and SAH there are very few cases in Others, Im going to grey them out in these figures
-
-# Remove NA periods
-esp_asir_clean <- esp_asir_summary %>%
-  filter(period %in% c(
-    "1995-1999", "2000-2004", "2005-2009",
-    "2010-2014", "2015-2019", "2020-2024"
-  )) %>%
-  mutate(
-    period = factor(period, levels = c(
-      "1995-1999", "2000-2004", "2005-2009",
-      "2010-2014", "2015-2019", "2020-2024"
-    ))
-  )
-
-# Updated plotting function
-plot_stroke_trend_clean <- function(stroke_type) {
+  # Colors and shapes
   nice_colors <- c(
     "Black African"    = "#e64173",
     "Black Caribbean"  = "#7b3294",
     "White"            = "#1a9850",
-    "Other"            = if (stroke_type %in% c("PICH", "SAH")) "grey80" else "#fdae61"
+    "Other"            = "#808080"  # grey
   )
-  
   nice_shapes <- c(
     "Black African"    = 16,
     "Black Caribbean"  = 17,
     "White"            = 15,
     "Other"            = 18
   )
-  
-  esp_asir_clean %>%
+
+  df <- esp_asir_clean %>%
     filter(
       stroke_class == stroke_type,
-      ethnicity %in% names(nice_colors),
+      !ethnicity %in% c("Overall", "Black Other"),
       !is.na(asir)
     ) %>%
-    ggplot(aes(x = period, y = asir, group = ethnicity, color = ethnicity, shape = ethnicity)) +
-    geom_line(size = 1.5) +
-    geom_point(size = 3.5) +
-    geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci),
-                  width = 0.2, size = 0.6, alpha = 0.5) +
+    mutate(
+      period = factor(period, levels = c(
+        "1995-1999", "2000-2004", "2005-2009",
+        "2010-2014", "2015-2019", "2020-2024"
+      )),
+      alpha = ifelse(ethnicity == "Other", 0.4, 1)
+    )
+
+  ggplot(df, aes(x = period, y = asir, group = ethnicity, color = ethnicity, shape = ethnicity)) +
+    geom_line(aes(alpha = alpha), linewidth = 1) +
+    geom_point(aes(alpha = alpha), size = 3) +
+    geom_errorbar(
+      aes(ymin = lower_ci, ymax = upper_ci, alpha = alpha),
+      width = 0.2, linewidth = 0.6
+    ) +
+    coord_cartesian(ylim = y_limits, expand = TRUE) +
     scale_color_manual(values = nice_colors) +
     scale_shape_manual(values = nice_shapes) +
+    scale_alpha_identity() +
     labs(
       title = paste("ESP-Standardised Incidence Rates:", stroke_type),
       subtitle = "95% Confidence Intervals by Ethnicity",
@@ -864,21 +924,37 @@ plot_stroke_trend_clean <- function(stroke_type) {
       color = "Ethnicity",
       shape = "Ethnicity"
     ) +
-    theme_minimal(base_size = 14) +
+    theme_minimal(base_size = 16) +
     theme(
-      plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
-      plot.subtitle = element_text(hjust = 0.5, size = 12),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 18),
+      plot.subtitle = element_text(hjust = 0.5, size = 13),
       axis.text.x = element_text(angle = 45, hjust = 1),
       legend.position = "bottom",
       legend.title = element_text(face = "bold"),
       panel.grid.minor = element_blank(),
-      panel.grid.major.x = element_blank()
+      panel.grid.major.x = element_blank(),
+      plot.margin = margin(10, 10, 10, 10)
     )
 }
+
 plot_stroke_trend_clean("Total strokes")
 plot_stroke_trend_clean("Ischaemic")
 plot_stroke_trend_clean("PICH")
 plot_stroke_trend_clean("SAH")
+
+# Save them
+ggsave("ASIR_plot_total_strokes.png", plot_stroke_trend_clean("Total strokes"), 
+       width = 10, height = 7, dpi = 300)
+
+ggsave("ASIR_plot_ischaemic_strokes.png", plot_stroke_trend_clean("Ischaemic"), 
+       width = 10, height = 7, dpi = 300)
+
+ggsave("ASIR_plot_PICH_strokes.png", plot_stroke_trend_clean("PICH"), 
+       width = 10, height = 7, dpi = 300)
+
+ggsave("ASIR_plot_SAH_strokes.png", plot_stroke_trend_clean("SAH"), 
+       width = 10, height = 7, dpi = 300)
+
 
 # ------------------------------------------------------------------
 # Supplementary 1
@@ -1081,6 +1157,65 @@ write_xlsx(
   ),
   path = "IRR_stroke_tables.xlsx"
 )
+
+
+# ------------------------------------------------------------------
+# Population description
+# ------------------------------------------------------------------
+
+# Change composition over time
+pop_ethnicity_trends <- pop_with_imd %>%
+  filter(!`Age Range` %in% c("0-4", "5-9", "10-14", "15", "16-17")) %>%
+  group_by(Year, Ethnicity) %>%
+  summarise(total = sum(Total_adjusted, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Year) %>%
+  mutate(prop = total / sum(total) * 100)
+
+# Change in age distribution
+pop_age_summary <- pop_with_imd %>%
+  filter(`Age Range` %in% c(
+    "18-19", "20-24", "25-29", "30-34", "35-39", "40-44", 
+    "45-49", "50-54", "55-59", "60-64", "65-69", "70-74", "75+"
+  )) %>%
+  mutate(age_group = case_when(
+    `Age Range` %in% c("65-69", "70-74", "75+") ~ "65+",
+    TRUE ~ "<65"
+  )) %>%
+  group_by(Year, age_group) %>%
+  summarise(total = sum(Total_adjusted, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Year) %>%
+  mutate(prop = total / sum(total) * 100)
+
+I continued doing this in the population calculation. 
+
+# == Change in deprivation ==
+library(dplyr)
+
+# Step 1: Exclude children <18
+pop_imd_quintiles <- pop_with_imd %>%
+  filter(!`Age Range` %in% c("0-4", "5-9", "10-14", "15", "16-17")) %>%
+  
+  # Step 2: Assign year-specific IMD quintiles using weighted ntile
+  group_by(Year) %>%
+  mutate(
+    quintile = ntile(IMD_score, 5)  # This assigns based on IMD_score rank within each year
+  ) %>%
+  ungroup()
+
+# Step 3: Summarise total adjusted population per year x quintile
+pop_quintile_summary <- pop_imd_quintiles %>%
+  mutate(imd_quintile = paste0("Q", quintile)) %>%
+  group_by(Year, imd_quintile) %>%
+  summarise(
+    total_adj = sum(Total_adjusted, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Year) %>%
+  mutate(
+    year_total = sum(total_adj),
+    prop = total_adj / year_total * 100
+  ) %>%
+  ungroup()
 
 # ------------------------------------------------------------------
 # Ethnic Poisson
