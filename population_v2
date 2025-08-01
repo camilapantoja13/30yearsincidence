@@ -1699,3 +1699,371 @@ pop_full <- full_grid %>%
   ungroup()
 
 write_csv(pop_full, "pop_full_interpolated_with_imd.csv")
+
+Plotting them
+library(dplyr)
+library(ggplot2)
+
+# Step 1: Subset and calculate proportions
+white_imd_prop <- pop_full %>%
+  filter(ethnicity_grouped == "White") %>%
+  group_by(year, imd_quintile) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total))
+
+# Step 2: Plot
+ggplot(white_imd_prop, aes(x = year, y = prop, fill = as.factor(imd_quintile))) +
+  geom_area(alpha = 0.8, colour = "white") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "IMD Composition Over Time: White Ethnic Group",
+    x = "Year",
+    y = "Proportion of Group in Each IMD Quintile",
+    fill = "IMD Quintile"
+  ) +
+  theme_minimal()
+
+# Actually writing the paper
+# Filter for years of interest
+ethnic_comp <- pop_full %>%
+  filter(year %in% c(1991, 2021)) %>%
+  group_by(year, ethnicity_grouped) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, desc(prop))
+
+# View results
+ethnic_comp <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, desc(prop))
+
+ethnic_comp
+imd_dist <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, imd_quintile) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, imd_quintile)
+
+imd_dist
+age_dist <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, age_group) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, age_group)
+
+age_dist
+print(age_dist, n = Inf)
+
+# Testing differences in age
+# Build a contingency table: age group × year
+age_table <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, age_group) %>%
+  summarise(n = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = year, values_from = n)
+
+# Convert to matrix for chi-squared test
+age_matrix <- as.matrix(age_table[,-1])
+rownames(age_matrix) <- age_table$age_group
+
+# Run chi-squared test
+age_chi <- chisq.test(age_matrix)
+age_chi
+
+# See distribution of ethnic groups
+ethnicity_dist <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, desc(prop))
+
+print(ethnicity_dist, n = Inf)
+
+ethnicity_table <- ethnicity_dist %>%
+  select(year, ethnicity_grouped, total) %>%
+  pivot_wider(names_from = year, values_from = total) %>%
+  distinct() %>%
+  column_to_rownames("ethnicity_grouped")
+
+# Confirm result
+print(ethnicity_table)
+
+# CHi square
+ethnicity_matrix <- as.matrix(ethnicity_table)
+chisq.test(ethnicity_matrix)
+
+# Lets check age distribution within ethnic groups
+ethnicity_age_dist <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped, age_group) %>%
+  summarise(n = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year, ethnicity_grouped) %>%
+  mutate(prop = n / sum(n)) %>%
+  arrange(year, ethnicity_grouped, age_group)
+
+print(ethnicity_age_dist, n = Inf)
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+library(dplyr)
+library(tidyr)
+
+white_age_matrix <- ethnicity_age_dist %>%
+  filter(ethnicity_grouped == "White") %>%
+  ungroup() %>%  # 🔑 ensures no lingering grouping variables
+  select(year, age_group, n) %>%
+  mutate(
+    n = as.numeric(n),
+    age_group = trimws(age_group)
+  ) %>%
+  pivot_wider(names_from = year, values_from = n) %>%
+  filter(!is.na(`1991`) & !is.na(`2024`)) %>%
+  column_to_rownames("age_group") %>%
+  as.matrix()
+chisq_result <- chisq.test(white_age_matrix)
+print(chisq_result)
+
+# List of ethnicities to test
+ethnic_groups <- c("White", "Black African", "Black Caribbean", "Black Other", "Other")
+
+# Create empty list to store results
+chisq_results <- list()
+
+# Loop through each group
+for (eth in ethnic_groups) {
+  message("Running test for: ", eth)
+  
+  mat <- ethnicity_age_dist %>%
+    filter(ethnicity_grouped == eth) %>%
+    ungroup() %>%
+    select(year, age_group, n) %>%
+    mutate(
+      n = as.numeric(n),
+      age_group = trimws(age_group)
+    ) %>%
+    pivot_wider(names_from = year, values_from = n) %>%
+    filter(!is.na(`1991`) & !is.na(`2024`)) %>%
+    column_to_rownames("age_group") %>%
+    as.matrix()
+  
+  # Run test if data is clean
+  if (all(is.finite(mat)) && all(mat >= 0)) {
+    chisq_results[[eth]] <- chisq.test(mat)
+  } else {
+    chisq_results[[eth]] <- paste("Invalid matrix for", eth)
+  }
+}
+
+# To view results:
+chisq_results$`White`
+chisq_results$`Black African`
+chisq_results$`Black Caribbean`
+chisq_results$`Black Other`
+chisq_results$`Other`
+
+# And making a table
+library(dplyr)
+library(tidyr)
+library(knitr)
+
+# Ethnic groups to include
+ethnicities <- c("White", "Black African", "Black Caribbean", "Black Other", "Other")
+
+# Function to return age distribution and p-value per group
+get_age_distribution_with_p <- function(group_name) {
+  # Filter and prep data
+  age_mat <- ethnicity_age_dist %>%
+    filter(ethnicity_grouped == group_name, year %in% c(1991, 2024)) %>%
+    select(year, age_group, n) %>%
+    pivot_wider(names_from = year, values_from = n) %>%
+    filter(!is.na(`1991`) & !is.na(`2024`)) %>%
+    arrange(age_group)
+
+  # Chi-square test
+  chisq <- chisq.test(as.matrix(age_mat[ , c("1991", "2024")]))$p.value
+
+  # Format result
+  age_mat %>%
+    mutate(Ethnicity = group_name,
+           p_value = ifelse(row_number() == 1, formatC(chisq, format = "e", digits = 2), NA)) %>%
+    relocate(Ethnicity, .before = age_group)
+}
+
+# Apply to all ethnic groups and bind into one table
+age_dist_table <- bind_rows(lapply(ethnicities, get_age_distribution_with_p))
+
+# Print in neat format
+kable(age_dist_table, caption = "Age Distribution by Ethnicity in 1991 and 2024 with Chi-square p-values")
+
+# Step 1: Summarise p-values per ethnicity
+age_chisq_summary <- age_dist_table %>%
+  filter(!is.na(p_value)) %>%
+  select(Ethnicity, p_value) %>%
+  distinct()
+
+# Step 2: Combine with total population counts per year per group
+ethnicity_summary <- ethnicity_age_dist %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped) %>%
+  summarise(total_pop = sum(n), .groups = "drop") %>%
+  pivot_wider(names_from = year, values_from = total_pop, names_prefix = "Pop_") %>%
+  rename(Ethnicity = ethnicity_grouped)
+
+# Step 3: Merge summaries
+final_summary <- left_join(ethnicity_summary, age_chisq_summary, by = "Ethnicity") %>%
+  mutate(across(starts_with("Pop_"), ~ scales::comma(.x)),
+         p_value = formatC(p_value, format = "e", digits = 2))
+
+# Step 4: Print
+knitr::kable(final_summary,
+             caption = "Total Population and Age Distribution Change (1991–2024) by Ethnicity with Chi-square p-values",
+             col.names = c("Ethnicity", "Population (1991)", "Population (2024)", "p-value (Age Distribution Change)"))
+
+write_csv(final_summary, "final_summary.csv")
+write_csv(age_dist_table, "age_dist_table.csv")
+
+# Now lets explore deprivation
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1. Summarise total population by year and IMD quintile
+imd_dist <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, imd_quintile) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, imd_quintile)
+
+# 2. Overall chi-squared test
+imd_matrix <- imd_dist %>%
+  select(year, imd_quintile, total) %>%
+  pivot_wider(names_from = year, values_from = total) %>%
+  arrange(imd_quintile) %>%
+  column_to_rownames("imd_quintile") %>%
+  as.matrix()
+
+chisq.test(imd_matrix)
+
+# 3. Ethnicity-specific IMD distribution
+imd_ethnicity <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped, imd_quintile) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year, ethnicity_grouped) %>%
+  mutate(prop = total / sum(total)) %>%
+  arrange(year, ethnicity_grouped, imd_quintile)
+
+# 4. Chi-square test per ethnic group
+imd_ethnicity_tests <- pop_full %>%
+  filter(year %in% c(1991, 2024)) %>%
+  group_by(year, ethnicity_grouped, imd_quintile) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year, ethnicity_grouped) %>%
+  mutate(prop = total / sum(total)) %>%
+  ungroup() %>%
+  group_split(ethnicity_grouped) %>%
+  map_df(~{
+    eth <- unique(.x$ethnicity_grouped)
+    
+    mat <- .x %>%
+      select(year, imd_quintile, total) %>%
+      pivot_wider(names_from = year, values_from = total) %>%
+      filter(!is.na(`1991`) & !is.na(`2024`)) %>%
+      column_to_rownames("imd_quintile") %>%
+      as.matrix()
+    
+    if (nrow(mat) > 0 && all(is.finite(mat))) {
+      test <- chisq.test(mat)
+      return(data.frame(ethnicity_grouped = eth, p_value = test$p.value))
+    } else {
+      return(data.frame(ethnicity_grouped = eth, p_value = NA))
+    }
+  })
+# Re-run with formatted p-values
+imd_ethnicity_tests <- imd_ethnicity_tests %>%
+  mutate(
+    p_value = ifelse(p_value < 2.2e-16, "< 2.2e-16", format.pval(p_value, digits = 3, scientific = TRUE))
+  )
+
+# View table
+print(imd_ethnicity_tests)
+
+
+# Making a nice table
+# 1. Ensure imd_quintile is character before combining
+imd_table <- imd_ethnicity %>%
+  select(year, ethnicity_grouped, imd_quintile, total) %>%
+  mutate(imd_quintile = as.character(imd_quintile)) %>%  # Convert to character here
+  pivot_wider(names_from = year, values_from = total) %>%
+  rename(`1991` = `1991`, `2024` = `2024`) %>%
+  arrange(ethnicity_grouped, imd_quintile)
+
+# 2. Calculate and append total per ethnicity
+imd_totals <- imd_table %>%
+  group_by(ethnicity_grouped) %>%
+  summarise(
+    imd_quintile = "Total Population",
+    `1991` = sum(`1991`, na.rm = TRUE),
+    `2024` = sum(`2024`, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+imd_table_with_totals <- bind_rows(imd_totals, imd_table)
+
+# 3. Join p-values
+imd_table_final <- imd_table_with_totals %>%
+  left_join(imd_ethnicity_tests, by = "ethnicity_grouped") %>%
+  mutate(p_value = ifelse(imd_quintile != "Total Population", NA, p_value)) %>%
+  select(ethnicity_grouped, imd_quintile, `1991`, `2024`, p_value)
+
+# 4. View the final tidy table
+print(imd_table_final, n = Inf)
+
+write_csv(imd_table_final, "imd_table_final.csv")
+
+# 5. Plot
+ggplot(imd_ethnicity, aes(x = factor(imd_quintile), y = prop, fill = factor(year))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ethnicity_grouped) +
+  labs(x = "IMD Quintile", y = "Proportion", fill = "Year") +
+  theme_minimal()
+
+Stacked
+ggplot(imd_ethnicity, aes(x = factor(year), y = prop, fill = factor(imd_quintile))) +
+  geom_bar(stat = "identity", position = "stack", width = 0.8) +
+  facet_wrap(~ethnicity_grouped, ncol = 3) +  # You can adjust layout here
+  scale_fill_manual(
+    values = c("#e0d6f9", "#bba0dd", "#8f6bc7"),  # pastel-to-deep purples
+    name = "IMD Quintile",
+    labels = c("1 (Most Deprived)", "2", "3 (Least Deprived)")
+  ) +
+  labs(
+    x = "Year",
+    y = "Proportion",
+    title = "Shifts in Deprivation Distribution by Ethnicity (1991 vs 2024)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.2, face = "bold", size = 12),
+    axis.text.x = element_text(angle = 0),
+    axis.title.x = element_text(margin = margin(t = 10))
+  )
