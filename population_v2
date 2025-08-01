@@ -1029,6 +1029,357 @@ df_2021_summary <- df_2021_ready %>%
 # Save it
 write_csv(df_2021_summary, "df_2021_summary.csv")
 
+The IMD merge didnt work well with the 2021, lets check it
+df_2021_adults %>%
+  filter(is.na(imd_score) | is.na(imd_quintile)) %>%
+  distinct(ward) %>%
+  arrange(ward)
+
+We are missing this:
+ 1 Brixton Acre Lane                 
+ 2 Brixton North                     
+ 3 Brixton Rush Common               
+ 4 Brixton Windrush                  
+ 5 Clapham Common & Abbeville        
+ 6 Clapham East                      
+ 7 Clapham Park                      
+ 8 Herne Hill & Loughborough Junction
+ 9 Kennington (Lambeth)              
+10 Myatt's Fields                    
+11 Newington (Southwark)             
+12 St George's (Southwark)           
+13 St Martin's (Lambeth)             
+14 Stockwell East                    
+15 Stockwell West & Larkhall         
+16 Vauxhall (Lambeth)                
+17 Waterloo & South Bank 
+
+N195 <- read_csv("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD checked_v2/N195.csv", 
++     skip = 2)
+
+ok so the best look up available between 2021 wards and LSOA code 2021 is this one. Can we create a code to match them as I have a dataset with LSOA code (2011) and Index of Multiple Deprivation (IMD) quintile rebased for London
+
+ Brixton Acre Lane, 
+E01003020
+E01003018
+E01003021
+E01003022
+E01003023
+E01003024
+E01003025
+
+Brixton North,
+E01003020
+E01003018
+E01003021
+E01003022
+E01003023
+E01003024
+E01003025
+E01003075
+E01003072
+E01003073
+E01003076
+E01003077
+E01003078
+E01003071
+E01003074
+
+ Brixton Rush Common
+E01003136
+E01003137
+E01003132
+E01003130
+E01003131
+E01003135
+E01003138
+E01003133
+E01003134
+E01003019
+E01003020
+E01003018
+E01003021
+E01003022
+E01003023
+E01003024
+E01003025
+E01003176
+E01003171
+E01003173
+E01003177
+E01003178
+E01003172
+E01003174
+E01003175
+E01003179
+
+Brixton Windrush 
+E01003019
+E01003019
+E01003020
+E01003018
+E01003021
+E01003022
+E01003023
+E01003024
+E01003025
+              
+ Clapham Common & Abbeville = E01003029
+E01003032
+E01003026
+E01003027
+E01003028
+E01003030
+E01003033
+E01003031
+
+       
+ Clapham East    =
+E01003059
+E01003060
+E01003061
+E01003053
+E01003054
+E01003056
+E01003058
+E01003055
+E01003057
+             
+ 7 Clapham Park = E01003029
+E01003032
+E01003026
+E01003027
+E01003028
+E01003030
+E01003033
+E01003031
+                      
+ 8 Herne Hill & Loughborough Junction
+E01003075
+E01003072
+E01003073
+E01003076
+E01003077
+E01003078
+E01003071
+E01003074
+
+ Kennington (Lambeth)        
+E01003108
+E01003110
+E01003111
+E01003112
+E01003105
+E01003106
+E01003107
+E01003109
+
+      
+10 Myatt's Fields      
+E01003180
+E01003183
+E01003181
+E01003184
+E01003185
+E01003186
+E01003187
+E01003182
+E01003188
+              
+11 Newington (Southwark)     
+E01003994
+E01003992
+E01003995
+E01003998
+E01003999
+E01032639
+E01003991
+E01003993
+E01003997
+E01003926
+        
+12 St George's (Southwark)     
+E01003930
+E01003932
+E01003933
+E01032584
+      
+13 St Martin's (Lambeth)             
+E01003176
+E01003171
+E01003173
+E01003177
+E01003178
+E01003172
+E01003174
+E01003175
+E01003179
+
+14 Stockwell East     
+E01003129
+E01003121
+E01003123
+E01003124
+E01003125
+E01003126
+E01003128
+E01003127
+               
+15 Stockwell West & Larkhall         
+E01003129
+E01003121
+E01003123
+E01003124
+E01003125
+E01003126
+E01003128
+E01003127
+E01003089
+E01003091
+E01003092
+E01003088
+E01003093
+E01003094
+E01003096
+E01003090
+E01003095
+
+16 Vauxhall (Lambeth)   
+E01003180
+E01003183
+E01003181
+E01003184
+E01003185
+E01003186
+E01003187
+E01003182
+E01003188
+             
+17 Waterloo & South Bank 
+
+ward_lsoa_lookup <- tibble::tibble(
+  ward_2021 = c(
+    rep("Brixton Acre Lane", 7),
+    rep("Brixton North", 15),
+    rep("Brixton Rush Common", 26),
+    rep("Brixton Windrush", 8),
+    rep("Clapham Common & Abbeville", 8),
+    rep("Clapham East", 9),
+    rep("Clapham Park", 8),
+    rep("Herne Hill & Loughborough Junction", 8),
+    rep("Kennington (Lambeth)", 8),
+    rep("Myatt's Fields", 9),
+    rep("Newington (Southwark)", 10),
+    rep("St George's (Southwark)", 4),
+    rep("St Martin's (Lambeth)", 9),
+    rep("Stockwell East", 8),
+    rep("Stockwell West & Larkhall", 17),
+    rep("Vauxhall (Lambeth)", 9)
+  ),
+  LSOA_code = c(
+    # Add the same LSOA codes as in your list in the same order
+    "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+    "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+    "E01003075", "E01003072", "E01003073", "E01003076", "E01003077", "E01003078", "E01003071", "E01003074",
+    "E01003136", "E01003137", "E01003132", "E01003130", "E01003131", "E01003135", "E01003138", "E01003133", "E01003134",
+    "E01003019", "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+    "E01003176", "E01003171", "E01003173", "E01003177", "E01003178", "E01003172", "E01003174", "E01003175", "E01003179",
+    "E01003019", "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+    "E01003029", "E01003032", "E01003026", "E01003027", "E01003028", "E01003030", "E01003033", "E01003031",
+    "E01003059", "E01003060", "E01003061", "E01003053", "E01003054", "E01003056", "E01003058", "E01003055", "E01003057",
+    "E01003029", "E01003032", "E01003026", "E01003027", "E01003028", "E01003030", "E01003033", "E01003031",
+    "E01003075", "E01003072", "E01003073", "E01003076", "E01003077", "E01003078", "E01003071", "E01003074",
+    "E01003108", "E01003110", "E01003111", "E01003112", "E01003105", "E01003106", "E01003107", "E01003109",
+    "E01003180", "E01003183", "E01003181", "E01003184", "E01003185", "E01003186", "E01003187", "E01003182", "E01003188",
+    "E01003994", "E01003992", "E01003995", "E01003998", "E01003999", "E01032639", "E01003991", "E01003993", "E01003997", "E01003926",
+    "E01003930", "E01003932", "E01003933", "E01032584",
+    "E01003176", "E01003171", "E01003173", "E01003177", "E01003178", "E01003172", "E01003174", "E01003175", "E01003179",
+    "E01003129", "E01003121", "E01003123", "E01003124", "E01003125", "E01003126", "E01003128", "E01003127",
+    "E01003129", "E01003121", "E01003123", "E01003124", "E01003125", "E01003126", "E01003128", "E01003127",
+    "E01003089", "E01003091", "E01003092", "E01003088", "E01003093", "E01003094", "E01003096", "E01003090", "E01003095",
+    "E01003180", "E01003183", "E01003181", "E01003184", "E01003185", "E01003186", "E01003187", "E01003182", "E01003188"
+  )
+)
+
+# 1. Join LSOA codes to df_2021_adults (allowing many-to-many)
+df_2021_with_lsoa <- df_2021_adults %>%
+  left_join(ward_lsoa_lookup, by = c("ward" = "ward_2021"), relationship = "many-to-many")
+
+# First rename for clarity
+imd_2019_clean <- N195 %>%
+  rename(
+    LSOA = `LSOA code (2011)`,
+    imd_rank_2019 = `Index of Multiple Deprivation (IMD) rank - England`
+  )
+
+# Join IMD data to each LSOA in the lookup table
+# Step: Add imd_quintile to ward_lsoa_lookup by joining decile and dividing by 2
+ward_lsoa_with_quintile <- ward_lsoa_lookup %>%
+  left_join(
+    imd_2019_clean %>%
+      select(
+        LSOA = `LSOA`,  # Rename for clean join
+        imd_decile = `Index of Multiple Deprivation (IMD) decile - England`
+      ),
+    by = c("LSOA_code" = "LSOA")
+  ) %>%
+  mutate(
+    imd_quintile = ceiling(imd_decile / 2)
+  )
+# Averaging them
+ward_quintile_avg <- ward_lsoa_with_quintile %>%
+  group_by(ward_2021) %>%
+  summarise(
+    imd_quintile = round(mean(imd_quintile, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+# Missing waterloo and southbank
+E01003015
+E01003013
+E01003014
+E01003016
+E01003017
+E01032582
+
+# 1. Add Waterloo & South Bank LSOAs to the lookup
+waterloo_lsoas <- tibble(
+  ward_2021 = "Waterloo & South Bank",
+  LSOA_code = c(
+    "E01003015", "E01003013", "E01003014",
+    "E01003016", "E01003017", "E01032582"
+  )
+)
+
+ward_lsoa_lookup <- bind_rows(ward_lsoa_lookup, waterloo_lsoas)
+
+ward_lsoa_with_quintile <- ward_lsoa_lookup %>%
+  left_join(
+    imd_2019_clean %>%
+      rename(imd_decile_2019 = `Index of Multiple Deprivation (IMD) decile - England`) %>%
+      mutate(imd_quintile = ceiling(imd_decile_2019 / 2)),
+    by = c("LSOA_code" = "LSOA")
+  )
+# 3. Average quintile by ward (rounded)
+ward_quintile_avg <- ward_lsoa_with_quintile %>%
+  group_by(ward_2021) %>%
+  summarise(
+    imd_quintile = round(mean(imd_quintile, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+df_2021_adults_with_quintile <- df_2021_adults %>%
+  left_join(
+    ward_quintile_avg,
+    by = c("ward" = "ward_2021")
+  )
+df_2021_adults_cleaned <- df_2021_adults_with_quintile %>%
+  mutate(
+    imd_quintile = coalesce(imd_quintile.x, imd_quintile.y)
+  ) %>%
+  select(-imd_quintile.x, -imd_quintile.y)  # Drop the old columns
+
+write_csv(df_2021_adults_cleaned, "df_2021_adults.csv")
 
 # Keep only the summaries
 names(df_1991_adults)
@@ -1191,3 +1542,160 @@ assign_quintile_2010 <- function(score) {
 
 df_2011_adults <- df_2011_adults %>%
   mutate(imd_quintile = assign_quintile_2010(imd_score))
+
+# And now lets do 2021
+IMD2019 <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD calculations/IMD2019.xlsx")
+So IMD2019 also has a column IMD average score rank in which 1 has the highest IMD average score (46.6)
+
+# Rename columns for clarity if needed
+imd_2019_data <- IMD2019 %>%
+  rename(
+    score_2019 = `IMD average score`,
+    rank_2019 = `IMD average score rank`
+  )
+
+# Compute national cutoffs based on rank
+imd_2019_cutoffs <- imd_2019_data %>%
+  arrange(rank_2019) %>%
+  mutate(n = row_number()) %>%
+  summarise(
+    cutoff_20 = score_2019[round(0.2 * n())],
+    cutoff_40 = score_2019[round(0.4 * n())],
+    cutoff_60 = score_2019[round(0.6 * n())],
+    cutoff_80 = score_2019[round(0.8 * n())]
+  )
+
+The most deprived on england is Golborne which has a score of 46.6 in 2019, so in this dataset, the most deprived are the highest
+cutoffs=
+20%= 29.52
+40% = 23.9
+60%= 17.8
+80% = 12.85
+
+assign_quintile_2021 <- function(score) {
+  case_when(
+    score >= 29.52           ~ 1,  # Most deprived
+    score >= 23.9            ~ 2,
+    score >= 17.8           ~ 3,
+    score >= 12.85            ~ 4,
+    !is.na(score)            ~ 5,  # Least deprived
+    TRUE                     ~ NA_integer_
+  )
+}
+df_2021_adults <- df_2021_adults %>%
+  mutate(imd_quintile = assign_quintile_2021(imd_score))
+
+table(df_2021_adults$imd_quintile)
+prop.table(table(df_2021_adults$imd_quintile)) * 100  # for percentages
+
+count
+df_2021_adults %>%
+  filter(imd_quintile == 3) %>%
+  group_by(ethnicity_grouped) %>%
+  summarise(pop_total = sum(pop_count, na.rm = TRUE)) %>%
+  mutate(percent = round(pop_total / sum(pop_total) * 100, 1)) %>%
+  arrange(desc(pop_total))
+
+
+# Lets remove the wards because they wont align
+But lets save eberything before
+
+write_csv(df_1991_adults, "df_1991_adults_quintiles.csv")
+write_csv(df_2001_adults, "df_2001_adults_quintiles.csv")
+write_csv(df_2011_adults, "df_2011_adults_quintiles.csv")
+write_csv(df_2021_adults, "df_2021_adults_quintiles.csv")
+
+# And now summarise
+df_1991_summarised <- df_1991_adults %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+df_2001_summarised <- df_2001_adults %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+df_2011_summarised <- df_2011_adults %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+df_2021_summarised <- df_2021_adults_cleaned %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+write_csv(df_1991_summarised, "df_19911_summarised.csv")
+write_csv(df_2001_summarised, "df_2001_summarised.csv")
+write_csv(df_2011_summarised, "df_2011_summarised.csv")
+write_csv(df_2021_summarised, "df_2021_summarised.csv")
+
+
+# LETS INTERPOLATEEEEE DHDSBHJCVSJHC
+library(tidyr)
+library(zoo)
+library(dplyr)
+
+pop_all_years <- bind_rows(
+  df_1991_summarised,
+  df_2001_summarised,
+  df_2011_summarised,
+  df_2021_summarised
+) %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+write_csv(pop_all_years, "pop_all_years_before_interpolation.csv")
+
+# Summarise per group per year
+
+pop_all_years_summarised <- pop_all_years %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+# create full grid
+full_grid <- expand_grid(
+  year = 1991:2024,
+  sex = unique(pop_all_years_summarised$sex),
+  ethnicity_grouped = unique(pop_all_years_summarised$ethnicity_grouped),
+  age_group = unique(pop_all_years_summarised$age_group),
+  imd_quintile = unique(pop_all_years_summarised$imd_quintile)
+)
+pop_all_years <- pop_all_years %>%
+  mutate(year = as.integer(year))
+
+full_grid <- full_grid %>%
+  mutate(year = as.integer(year))
+
+# Standarise before joining
+standardise_age_group <- function(x) gsub("–", "-", x)
+
+# Apply to all adult datasets
+df_1991_summarised <- df_1991_summarised %>% mutate(age_group = standardise_age_group(age_group))
+df_2001_summarised <- df_2001_summarised %>% mutate(age_group = standardise_age_group(age_group))
+df_2011_summarised <- df_2011_summarised %>% mutate(age_group = standardise_age_group(age_group))
+df_2021_summarised <- df_2021_summarised %>% mutate(age_group = standardise_age_group(age_group))
+
+pop_all_years <- bind_rows(
+  df_1991_summarised,
+  df_2001_summarised,
+  df_2011_summarised,
+  df_2021_summarised
+) %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+# Recreate full_grid with corrected levels
+full_grid <- expand_grid(
+  year = 1991:2024,
+  sex = unique(pop_all_years$sex),
+  ethnicity_grouped = unique(pop_all_years$ethnicity_grouped),
+  age_group = unique(pop_all_years$age_group),
+  imd_quintile = unique(pop_all_years$imd_quintile)
+)
+
+pop_full <- full_grid %>%
+  left_join(pop_all_years, by = c("year", "sex", "ethnicity_grouped", "age_group", "imd_quintile")) %>%
+  arrange(sex, ethnicity_grouped, age_group, imd_quintile, year) %>%
+  group_by(sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  mutate(pop_count_interp = zoo::na.approx(pop_count, x = year, na.rm = FALSE, rule = 2)) %>%
+  ungroup()
+
+write_csv(pop_full, "pop_full_interpolated_with_imd.csv")
