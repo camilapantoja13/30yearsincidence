@@ -1579,11 +1579,278 @@ plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 6.5), filename 
 
 
 
+# ------------------------------------------------------------------
+# Ethnic Poisson Adjusted by IMD
+# ------------------------------------------------------------------
+
+library(dplyr)
+library(purrr)
+library(broom)
+library(flextable)
+
+# Create stroke cases with IMD
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(imd_quintile = case_when(
+    imd_decile %in% 1:2 ~ "1",
+    imd_decile %in% 3:4 ~ "2",
+    imd_decile %in% 5:6 ~ "3",
+    imd_decile %in% 7:8 ~ "4",
+    imd_decile %in% 9:10 ~ "5",
+    TRUE ~ NA_character_
+  ))
+# 5a. Subtype-specific stroke counts with IMD
+stroke_counts <- slsr_clean_icd10 %>%
+  group_by(period, ethnicity_group, sex, age_group, imd_quintile, stroke_type) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# 5b. Total strokes across all subtypes with IMD
+total_strokes <- slsr_clean_icd10 %>%
+  group_by(period, ethnicity_group, sex, age_group, imd_quintile) %>%
+  summarise(cases = n(), .groups = "drop") %>%
+  mutate(stroke_type = "Total")
+
+# 5c. Combine both datasets
+stroke_counts_all <- bind_rows(stroke_counts, total_strokes)
+
+# adjust poisson_data_combined to include IMD
+poisson_data_combined <- stroke_counts_all %>%
+  left_join(pop_standardised, 
+            by = c("period", "ethnicity_group", "sex", "age_group", "imd_quintile")) %>%
+  filter(!is.na(stroke_type), stroke_type != "Unknown") %>%
+  mutate(
+    period = factor(period, levels = period_levels, ordered = TRUE),
+    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+    age_group = factor(age_group),
+    sex = factor(sex),
+    imd_quintile = factor(imd_quintile)
+  )
+
+# Adjust the population
+pop_standardised <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
+  mutate(
+    age_group = recode_age_group(age_group),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024"
+    )
+  ) %>%
+  filter(
+    !is.na(ethnicity_group),
+    !is.na(age_group),
+    !is.na(period),
+    !is.na(sex),
+    !is.na(imd_quintile)
+  ) %>%
+  group_by(period, ethnicity_group, sex, age_group, imd_quintile) %>%
+  mutate(imd_quintile = as.character(imd_quintile)) %>%
+  group_by(period, ethnicity_group, sex, age_group, imd_quintile) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+  
+
+# Poisson model
+run_ethnicity_model_full_adj <- function(data) {
+  if (
+    nrow(data) == 0 ||
+    sum(data$cases, na.rm = TRUE) == 0 ||
+    sum(data$person_years, na.rm = TRUE) == 0 ||
+    !"imd_quintile" %in% names(data)
+  ) {
+    message("⚠️ Skipped due to empty data or missing imd_quintile")
+    return(NULL)
+  }
+
+  data <- data %>%
+    filter(!is.na(person_years), person_years > 0) %>%
+    group_by(ethnicity_group, age_group, sex, imd_quintile) %>%
+    filter(!(n() == 1 & cases <= 1)) %>%
+    ungroup() %>%
+    mutate(
+      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+      age_group = factor(age_group),
+      sex = factor(sex),
+      imd_quintile = factor(imd_quintile, levels = c("1", "2", "3", "4", "5"), ordered = TRUE)
+    )
+
+  tryCatch({
+    model <- glm(cases ~ ethnicity_group + age_group + sex + imd_quintile,
+                 offset = log(person_years),
+                 family = poisson(link = "log"),
+                 data = data)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(stringr::str_detect(term, "ethnicity_group")) %>%
+      mutate(
+        IRR_label = paste0(
+          round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+        ),
+        significant = p.value < 0.05
+      )
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+# RUn for the results
+results_ethnicity_adj_imd <- poisson_data_combined %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    message("▶️ Running model for period: ", unique(df$period), 
+            " | stroke_type: ", unique(df$stroke_type),
+            " | n = ", nrow(df), 
+            " | cases = ", sum(df$cases, na.rm = TRUE), 
+            " | imd: ", paste(unique(df$imd_quintile), collapse = ","))
+    
+    model_out <- run_ethnicity_model_full_adj(df)
+    
+    if (!is.null(model_out)) {
+      model_out$period <- unique(df$period)
+      model_out$stroke_type <- unique(df$stroke_type)
+      model_out$sex <- "All"
+      return(model_out)
+    } else {
+      message("⚠️ Model failed for: ", unique(df$period), " | ", unique(df$stroke_type))
+      return(NULL)
+    }
+  }) %>%
+  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
+
+# Results for total population
+results_ethnicity_adj_imd <- poisson_data_combined %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    model_out <- run_ethnicity_model_full_adj(df)
+    if (!is.null(model_out)) {
+      model_out$period <- unique(df$period)
+      model_out$stroke_type <- unique(df$stroke_type)
+      model_out$sex <- "All"
+    }
+    model_out
+  }) %>%
+  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
 
 
-# ------------------------------------------------------------------
-# next: Ethnic Poisson Adjusted by IMD
-# ------------------------------------------------------------------
+# Dissagregated by sex
+poisson_data_strat_sex <- poisson_data_combined %>%
+  filter(
+    !ethnicity_group %in% c("All"),
+    sex %in% c("Male", "Female")
+  )
+
+run_ethnicity_model_sexstrat_adj <- function(data) {
+  if (
+    nrow(data) == 0 ||
+    sum(data$cases, na.rm = TRUE) == 0 ||
+    sum(data$person_years, na.rm = TRUE) == 0 ||
+    !"imd_quintile" %in% names(data) ||
+    n_distinct(data$ethnicity_group) < 2
+  ) {
+    message("⚠️ Skipping due to insufficient data or lack of variation in ethnicity")
+    return(NULL)
+  }
+
+  data <- data %>%
+    filter(!is.na(person_years), person_years > 0) %>%
+    group_by(ethnicity_group, age_group, imd_quintile) %>%
+    filter(!(n() == 1 & cases <= 1)) %>%
+    ungroup() %>%
+    mutate(
+      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+      age_group = factor(age_group),
+      imd_quintile = factor(imd_quintile, levels = c("1", "2", "3", "4", "5"), ordered = TRUE)
+    )
+
+  tryCatch({
+    model <- glm(cases ~ ethnicity_group + age_group + imd_quintile,
+                 offset = log(person_years),
+                 family = poisson(link = "log"),
+                 data = data)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(stringr::str_detect(term, "ethnicity_group")) %>%
+      mutate(
+        IRR_label = paste0(
+          round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+        ),
+        significant = p.value < 0.05
+      )
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+results_ethnicity_sexstrat_adj <- poisson_data_strat_sex %>%
+  group_by(period, stroke_type, sex) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    message("▶️ Running: ", unique(df$period), " | ", unique(df$stroke_type), " | ", unique(df$sex))
+    model_out <- run_ethnicity_model_sexstrat_adj(df)
+    if (!is.null(model_out)) {
+      model_out$period <- unique(df$period)
+      model_out$stroke_type <- unique(df$stroke_type)
+      model_out$sex <- unique(df$sex)
+    }
+    model_out
+  }) %>%
+  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
+
+# Save them
+
+# Create flextables for each stroke subtype (IMD adjusted, total population)
+ft_total_all_imd     <- make_ethnicity_flextable(results_ethnicity_adj_imd, "Total", FALSE)
+ft_ischaemic_all_imd <- make_ethnicity_flextable(results_ethnicity_adj_imd, "Ischaemic", FALSE)
+ft_pich_all_imd      <- make_ethnicity_flextable(results_ethnicity_adj_imd, "PICH", FALSE)
+ft_sah_all_imd       <- make_ethnicity_flextable(results_ethnicity_adj_imd, "SAH", FALSE)
+
+# Save to Excel (sheet names shortened for Excel's 31-char limit)
+write_xlsx(
+  list(
+    "Total – All (IMD adj)"     = ft_total_all_imd$body$dataset,
+    "Isch – All (IMD adj)"      = ft_ischaemic_all_imd$body$dataset,
+    "PICH – All (IMD adj)"      = ft_pich_all_imd$body$dataset,
+    "SAH – All (IMD adj)"       = ft_sah_all_imd$body$dataset
+  ),
+  path = "ethnicity_IRR_total_IMD.xlsx"
+)
+# For IMD-adjusted sex-stratified models
+ft_total_sex_adj     <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "Total", TRUE)
+ft_ischaemic_sex_adj <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "Ischaemic", TRUE)
+ft_pich_sex_adj      <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "PICH", TRUE)
+ft_sah_sex_adj       <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "SAH", TRUE)
+
+write_xlsx(
+  list(
+    "Total – Sex (IMD adj)"     = ft_total_sex_adj$body$dataset,
+    "Isch – Sex (IMD adj)"      = ft_ischaemic_sex_adj$body$dataset,
+    "PICH – Sex (IMD adj)"      = ft_pich_sex_adj$body$dataset,
+    "SAH – Sex (IMD adj)"       = ft_sah_sex_adj$body$dataset
+  ),
+  path = "ethnicity_IRRsexstrat_IMD.xlsx"
+)
+
+===
 # Create IMD groups in the cleaned dataset
 slsr_clean_imd_groups <- slsr_clean %>%
   mutate(
