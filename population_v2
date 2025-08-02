@@ -2067,3 +2067,50 @@ ggplot(imd_ethnicity, aes(x = factor(year), y = prop, fill = factor(imd_quintile
     axis.text.x = element_text(angle = 0),
     axis.title.x = element_text(margin = margin(t = 10))
   )
+
+# Plotting changes in the ethnic distribution
+library(dplyr)
+
+ethnicity_over_time <- pop_full %>%
+  mutate(period = case_when(
+    year >= 1991 & year <= 1999 ~ "1995–1999",
+    year >= 2000 & year <= 2004 ~ "2000–2004",
+    year >= 2005 & year <= 2009 ~ "2005–2009",
+    year >= 2010 & year <= 2014 ~ "2010–2014",
+    year >= 2015 & year <= 2019 ~ "2015–2019",
+    year >= 2020 & year <= 2024 ~ "2020–2024",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(period)) %>%
+  group_by(period, ethnicity_grouped) %>%
+  summarise(total = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(period) %>%
+  mutate(prop = total / sum(total))
+
+library(ggplot2)
+
+eth_comp_plot <- ggplot(ethnicity_over_time, aes(x = period, y = prop, fill = ethnicity_grouped)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.8) +
+  scale_fill_manual(
+    values = c(
+      "White" = "#7b3294",           # deep purple
+      "Black African" = "#af8dc3",   # lavender
+      "Black Other" = "#b0b0b0",
+      "Black Caribbean" = "#4575b4", # blue
+      "Other" = "#d01c8b"            # pink
+    )
+  ) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Shifts in Ethnic Composition of the Population (1995–2024)",
+    x = "Period",
+    y = "Population Share",
+    fill = "Ethnicity"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+ggsave("ethnicity_composition_by_period.png", eth_comp_plot, width = 8, height = 6, dpi = 300)
