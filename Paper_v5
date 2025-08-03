@@ -1511,33 +1511,98 @@ plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 6.5))
 plot_forest_ethnicity_dodged("PICH", x_limit = c(0.5, 5.5), filename = "IRR_ethnicity_PICH.png")
 plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 6.5), filename = "IRR_ethnicity_SAH.png")
 
-# == and now by sex ==
-library(dplyr)
-library(forcats)
+# Improving for SAH
+plot_forest_ethnicity_dodged_trunc <- function(subtype, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_total_clean %>% 
+    filter(stroke_type == subtype) %>%
+    mutate(
+      CI_exceeds = conf.high > max(x_limit),
+      CI_label = ifelse(CI_exceeds, ">", ""),
+      conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+      conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE)
+    )
 
-results_sex_clean <- results_ethnicity_sexstrat %>%
-  filter(grepl("ethnicity_group", term)) %>%
-  filter(term != "ethnicity_groupWhite", term != "ethnicity_groupAll") %>%
-  mutate(
-    Ethnicity = gsub("ethnicity_group", "", term),
-    period = factor(period, levels = rev(levels(period))),
-    Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other"),
-    group = paste(period, Ethnicity, sep = " – ")  # For unique y-axis labels
-  )
-
-#Plot function
-plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.5, 3.5), filename = NULL) {
-  df <- results_sex_clean %>%
-    filter(stroke_type == subtype, sex == sex_filter) %>%
-    mutate(group = fct_rev(factor(group, levels = unique(group))))
-
-  gg <- ggplot(df, aes(x = estimate, y = group, color = Ethnicity, shape = Ethnicity)) +
-    geom_point(size = 3) +
-    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.25, alpha = 0.8) +
+  gg <- ggplot(df, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
+    geom_point(position = position_dodge(width = 0.7), size = 3) +
+    geom_errorbarh(
+      aes(xmin = conf.low.trunc, xmax = conf.high.trunc),
+      height = 0.25,
+      position = position_dodge(width = 0.7),
+      alpha = 0.8
+    ) +
+    geom_text(
+      aes(label = CI_label),
+      hjust = -0.3,
+      position = position_dodge(width = 0.7),
+      size = 3,
+      na.rm = TRUE
+    ) +
     geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
     scale_color_manual(values = ethnicity_colours) +
     scale_shape_manual(values = ethnicity_shapes) +
-    scale_x_continuous(trans = "log", limits = x_limit) +
+    scale_x_continuous(
+      trans = "log",
+      limits = x_limit,
+      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7),
+      labels = scales::label_number(accuracy = 0.1)
+    ) +    
+    labs(
+      title = paste("IRR by Ethnicity –", subtype),
+      x = "Incidence Rate Ratio (IRR)",
+      y = "Period"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.position = "bottom"
+    )
+  
+  if (!is.null(filename)) {
+    ggsave(filename, gg, width = 7.5, height = 6)
+  }
+
+  return(gg)
+}
+
+plot_forest_ethnicity_dodged_trunc("PICH", x_limit = c(0.5, 5.5), filename = "IRR_ethnicity_PICH_trunc.png")
+plot_forest_ethnicity_dodged_trunc("SAH", x_limit = c(0.5, 6.5), filename = "IRR_ethnicity_SAH_trunc.png")
+
+# == and now by sex ==
+plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_sex_clean %>%
+    filter(stroke_type == subtype, sex == sex_filter) %>%
+    mutate(
+  period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
+                                         "2010-2014", "2015-2019", "2020-2024"))),
+  group = period,
+  conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+  conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE),
+  CI_label = ifelse(conf.high > max(x_limit), ">", "")
+)   
+  gg <- ggplot(df, aes(x = estimate, y = group, color = Ethnicity, shape = Ethnicity)) +
+    geom_point(size = 3, position = position_dodge(width = 0.7)) +
+    geom_errorbarh(
+      aes(xmin = conf.low.trunc, xmax = conf.high.trunc),
+      height = 0.25,
+      alpha = 0.8,
+      position = position_dodge(width = 0.7)
+    ) +
+    geom_text(
+      aes(label = CI_label),
+      hjust = -0.3,
+      position = position_dodge(width = 0.7),
+      size = 3,
+      na.rm = TRUE
+    ) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
+    scale_color_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    scale_x_continuous(
+      trans = "log",
+      limits = x_limit,
+      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 3.5),
+      labels = scales::label_number(accuracy = 1)
+    ) +
     labs(
       title = paste("IRR by Ethnicity –", subtype, "(", sex_filter, ")"),
       x = "Incidence Rate Ratio (IRR)",
@@ -1563,8 +1628,8 @@ plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5))
 plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5))
 plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 5.5))
 plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 5.5))
-plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 6.5))
-plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 6.5))
+plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 14))
+plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25))
 
 
 # Save
@@ -1574,9 +1639,8 @@ plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5), f
 plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_male.png")
 plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 5.5), filename = "IRR_pich_female.png")
 plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 5.5), filename = "IRR_pich_male.png")
-plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 6.5), filename = "IRR_sah_female.png")
-plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 6.5), filename = "IRR_sah_male.png")
-
+plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 14), filename = "IRR_sah_female.png")
+plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25), filename = "IRR_sah_male.png")
 
 
 # ------------------------------------------------------------------
@@ -1749,7 +1813,7 @@ results_ethnicity_adj_imd <- poisson_data_combined %>%
   relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
 
 
-# Dissagregated by sex
+# ==== Dissagregated by sex just results no plots =====
 poisson_data_strat_sex <- poisson_data_combined %>%
   filter(
     !ethnicity_group %in% c("All"),
@@ -1852,7 +1916,7 @@ write_xlsx(
 
 
 # =====================
-And now plotting these
+And now plotting IMD adjusted ethnic poisson IRR
 # =====================
 
 # Cleaning
@@ -1947,7 +2011,7 @@ plot_forest_ethnicity_dodged <- function(subtype, x_limit = c(0.5, 7), filename 
       labels = scales::label_number(accuracy = 0.1)
     ) +
     labs(
-      title = paste("IRR by Ethnicity –", subtype),
+      title = paste("IRR by Ethnicity (IMD Adjusted) –", subtype),
       x = "Incidence Rate Ratio (IRR)",
       y = "Period"
     ) +
@@ -1967,7 +2031,7 @@ plot_forest_ethnicity_dodged <- function(subtype, x_limit = c(0.5, 7), filename 
 plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 7))
 plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 7), filename = "IRR_ethnicity_SAH_IMD_truncated.png")
 
-# == And now by sex === 
+# == And now by sex dissagregated === 
 
 # Clean the results
 results_sexstrat_clean_split <- results_ethnicity_sexstrat_adj %>%
@@ -2052,6 +2116,7 @@ plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Total", "Male",
 plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Ischaemic", "Male",
                              filename = "IRR_ethnicity_Ischaemic_Male.png")
 
+# Improving PICH and SAH
 
 plot_forest_ethnicity_by_sex <- function(df, subtype, sex, x_limit = c(0.5, 10), filename = NULL) {
   df_sub <- df %>%
@@ -2114,6 +2179,42 @@ plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "PICH", "Male", 
                              filename = "IRR_ethnicity_PICH_Male.png")
 plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "PICH", "Female", x_limit = c(0.5, 30),
                              filename = "IRR_ethnicity_PICH_Female.png")
+
+
+# And SAH I just gave up :(
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+
+# Im here. Have finished the forest plots IMD adjusted. 
+# Next I have to do the ethnicity x ses analysis
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
