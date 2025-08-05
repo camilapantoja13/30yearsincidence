@@ -1569,16 +1569,19 @@ plot_forest_ethnicity_dodged_trunc("SAH", x_limit = c(0.5, 6.5), filename = "IRR
 
 # == and now by sex ==
 plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.5, 3.5), filename = NULL) {
-  df <- results_sex_clean %>%
+  df <- results_ethnicity_sexstrat %>%
     filter(stroke_type == subtype, sex == sex_filter) %>%
     mutate(
-  period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
-                                         "2010-2014", "2015-2019", "2020-2024"))),
-  group = period,
-  conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
-  conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE),
-  CI_label = ifelse(conf.high > max(x_limit), ">", "")
-)   
+      Ethnicity = gsub("ethnicity_group", "", term),
+      period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
+                                             "2010-2014", "2015-2019", "2020-2024"))),
+      group = period,
+      CI_exceeds = conf.high > max(x_limit),
+      CI_label = ifelse(CI_exceeds, ">", ""),
+      conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+      conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE)
+    )
+
   gg <- ggplot(df, aes(x = estimate, y = group, color = Ethnicity, shape = Ethnicity)) +
     geom_point(size = 3, position = position_dodge(width = 0.7)) +
     geom_errorbarh(
@@ -1600,8 +1603,8 @@ plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.
     scale_x_continuous(
       trans = "log",
       limits = x_limit,
-      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 3.5),
-      labels = scales::label_number(accuracy = 1)
+      breaks = pretty(x_limit, n = 6),
+      labels = scales::label_number(accuracy = 0.1)
     ) +
     labs(
       title = paste("IRR by Ethnicity –", subtype, "(", sex_filter, ")"),
@@ -1621,26 +1624,22 @@ plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.
   return(gg)
 }
 
-# Display
-plot_forest_ethnicity_by_sex_sep("Total", "Female", x_limit = c(0.5, 3.5))
-plot_forest_ethnicity_by_sex_sep("Total", "Male", x_limit = c(0.5, 3.5))
-plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5))
-plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5))
-plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 5.5))
-plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 5.5))
-plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 14))
-plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25))
+# Total
+plot_forest_ethnicity_by_sex_sep("Total", "Female", x_limit = c(0.5, 3.5), filename = "IRR_total_female_unadjusted.png")
+plot_forest_ethnicity_by_sex_sep("Total", "Male", x_limit = c(0.5, 3.5), filename = "IRR_total_male_unadjusted.png")
 
+# Ischaemic
+plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_female_unadjusted.png")
+plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_male_unadjusted.png")
 
-# Save
-plot_forest_ethnicity_by_sex_sep("Total", "Female", x_limit = c(0.5, 3.5), filename = "IRR_total_female.png")
-plot_forest_ethnicity_by_sex_sep("Total", "Male", x_limit = c(0.5, 3.5), filename = "IRR_total_male.png")
-plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_female.png")
-plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_male.png")
-plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 5.5), filename = "IRR_pich_female.png")
-plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 5.5), filename = "IRR_pich_male.png")
-plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 14), filename = "IRR_sah_female.png")
-plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25), filename = "IRR_sah_male.png")
+# PICH
+plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 7), filename = "IRR_pich_female_unadjusted.png")
+plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 9), filename = "IRR_pich_male_unadjusted.png")
+
+# SAH
+plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 16), filename = "IRR_sah_female_unadjusted.png")
+plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25), filename = "IRR_sah_male_unadjusted.png")
+
 
 
 # ------------------------------------------------------------------
@@ -1758,24 +1757,43 @@ poisson_data_grouped <- stroke_counts_all %>%
 poisson_data_grouped_filtered <- poisson_data_grouped %>%
   filter(stroke_type != "Unknown")
 
-# Poisson model
-run_ethnicity_model_ageimd <- function(data) {
+#Poisson model
+
+run_ethnicity_model_ageimd <- function(data, return_model = FALSE) {
   if (nrow(data) == 0 || sum(data$cases, na.rm = TRUE) == 0 || sum(data$person_years, na.rm = TRUE) == 0) {
+    message("⚠️ Skipped: no data")
     return(NULL)
   }
 
   data <- data %>%
+    filter(!is.na(person_years), person_years > 0) %>%
+    group_by(ethnicity_group, age_group, imd_group) %>%
+    filter(!(n() == 1 & cases == 0)) %>%
+    ungroup() %>%
     mutate(
-      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+      ethnicity_group = factor(ethnicity_group),
+      ethnicity_group = relevel(ethnicity_group, ref = "White"),  # ← fixed again
       age_group = factor(age_group),
-      imd_group = relevel(factor(imd_group), ref = "Q1")
+      imd_group = factor(imd_group),
+      imd_group = relevel(imd_group, ref = "Q1")                   # ← fixed again
     )
 
+  if (
+    length(unique(data$ethnicity_group)) < 2 ||
+    length(unique(data$imd_group)) < 2
+  ) {
+    message("⚠️ Skipped: insufficient factor levels")
+    return(NULL)
+  }
+
   tryCatch({
-    model <- glm(cases ~ ethnicity_group + age_group + imd_group,
-                 offset = log(person_years),
-                 family = poisson(link = "log"),
-                 data = data)
+    model <- glm(
+      cases ~ ethnicity_group + age_group + imd_group,
+      offset = log(person_years),
+      family = poisson(link = "log"),
+      data = data
+    )
+    if (return_model) return(model)
 
     broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
       filter(stringr::str_detect(term, "ethnicity_group")) %>%
@@ -1786,17 +1804,22 @@ run_ethnicity_model_ageimd <- function(data) {
         ),
         significant = p.value < 0.05
       )
-  }, error = function(e) NULL)
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
 }
 
-# Run the results
-results_ethnicity_adj_imdgroup <- poisson_data_grouped_filtered %>%
+library(dplyr)
+library(purrr)
+
+results_ethnicity_adj_ageimd <- poisson_data_grouped_filtered %>%
   filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
   group_by(period, stroke_type) %>%
   group_split() %>%
   map_dfr(~{
     df <- .
-    model_out <- run_ethnicity_model_full_adj(df)
+    model_out <- run_ethnicity_model_ageimd(df)
     if (!is.null(model_out)) {
       model_out$period <- unique(df$period)
       model_out$stroke_type <- unique(df$stroke_type)
@@ -1806,66 +1829,213 @@ results_ethnicity_adj_imdgroup <- poisson_data_grouped_filtered %>%
   }) %>%
   relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
 
+# Check overdispersion
+calculate_dispersion <- function(model) {
+  if (is.null(model)) return(NA)
+  rdf <- df.residual(model)
+  if (rdf == 0) return(NA)
+  sum(residuals(model, type = "pearson")^2, na.rm = TRUE) / rdf
+}
 
-### This looks better, yet there some estimates that are too high. Ill check on those.
+# RUn it
+library(dplyr)
+library(purrr)
+library(tibble)
 
+results_dispersion_adj_ageimd <- poisson_data_grouped_filtered %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    model <- run_ethnicity_model_ageimd(df, return_model = TRUE)
+    dispersion <- calculate_dispersion(model)
 
+    tibble(
+      period = unique(df$period),
+      stroke_type = unique(df$stroke_type),
+      dispersion = dispersion
+    )
+  })
 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! Im here !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+library(ggplot2)
 
+ggplot(results_dispersion_ageimd, aes(x = period, y = dispersion, fill = stroke_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_hline(yintercept = 1, linetype = "dashed", colour = "red") +
+  labs(
+    title = "Overdispersion by Stroke Subtype and Period",
+    x = "Period",
+    y = "Dispersion (Pearson χ² / df)",
+    fill = "Stroke Subtype"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 14, face = "bold")
+  )
 
+write_xlsx(results_ethnicity_adj_ageimd, path = "results_ethnicity_adj_ageimd.xlsx")
 
+write_xlsx(results_dispersion_adj_ageimd, path = "rresults_dispersion_adj_ageimd.xlsx")
 
+# === Negative Binomial Model===
 
+# Checking again poisson_data_grouped_filtered
+poisson_data_grouped_filtered %>%
+  filter(is.na(imd_group)) %>%
+  count(period, stroke_type)
 
+# Remove these as they are people that dont have the IMD
+poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+  filter(
+    !is.na(imd_group),
+    !is.na(person_years),
+    person_years > 0
+  )
 
+# Inspecting the ones with no person_years
+poisson_data_grouped_filtered %>%
+  filter(is.na(person_years) | person_years == 0) %>%
+  count(period, stroke_type)
 
+-> returned no one :)
 
-# Poisson model
-run_ethnicity_model_full_adj <- function(data) {
-  if (
-    nrow(data) == 0 ||
-    sum(data$cases, na.rm = TRUE) == 0 ||
-    sum(data$person_years, na.rm = TRUE) == 0 ||
-    !"imd_group" %in% names(data)
-  ) {
-    message("⚠️ Skipped due to empty data or missing imd_group")
+# Doing the NB model
+library(MASS)
+library(broom)
+
+run_ethnicity_model_ageimd_nb <- function(data) {
+  if (nrow(data) == 0 || sum(data$cases, na.rm = TRUE) == 0 || sum(data$person_years, na.rm = TRUE) == 0) {
+    message("⚠️ Skipped: no data")
     return(NULL)
   }
 
-data <- data %>%
-  filter(!is.na(person_years), person_years > 0) %>%
-  group_by(ethnicity_group, age_group, sex, imd_group) %>%
-  filter(!(n() == 1 & cases == 0)) %>%  # ⬅️ FIXED HERE
-  ungroup() %>%
-  mutate(
-    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
-    age_group = factor(age_group),
-    sex = factor(sex),
-    imd_group = relevel(factor(imd_group), ref = "Q1")
-  )
+  data <- data %>%
+    mutate(
+      ethnicity_group = factor(ethnicity_group),
+      ethnicity_group = relevel(ethnicity_group, ref = "White"),
+      age_group = factor(age_group),
+      imd_group = factor(imd_group),
+      imd_group = relevel(imd_group, ref = "Q1")
+    )
 
-  # Diagnostic logging
-  message("📊 Levels check → Ethnicity: [", paste(levels(data$ethnicity_group), collapse = ", "), "]; ",
-          "IMD: [", paste(levels(data$imd_group), collapse = ", "), "]; ",
-          "Sex: [", paste(levels(data$sex), collapse = ", "), "]; ",
-          "Age groups: ", length(unique(data$age_group)))
-
-  # Skip model if any factor has fewer than 2 levels
   if (
     length(unique(data$ethnicity_group)) < 2 ||
-    length(unique(data$imd_group)) < 2 ||
-    length(unique(data$sex)) < 2
+    length(unique(data$imd_group)) < 2
   ) {
-    message("⚠️ Skipping model due to insufficient factor levels")
+    message("⚠️ Skipped: insufficient factor levels")
     return(NULL)
   }
 
   tryCatch({
-    model <- glm(
-      cases ~ ethnicity_group + age_group + sex + imd_group,
+    model <- glm.nb(
+      cases ~ ethnicity_group + age_group + imd_group,
       offset = log(person_years),
-      family = poisson(link = "log"),
+      data = data
+    )
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(stringr::str_detect(term, "ethnicity_group")) %>%
+      mutate(
+        IRR_label = paste0(
+          round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3))
+        ),
+        significant = p.value < 0.05
+      )
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+# RUnning it
+library(dplyr)
+library(purrr)
+
+results_ethnicity_adj_ageimd_nb <- poisson_data_grouped_filtered %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    model_out <- run_ethnicity_model_ageimd_nb(df)
+    if (!is.null(model_out)) {
+      model_out$period <- unique(df$period)
+      model_out$stroke_type <- unique(df$stroke_type)
+      model_out$sex <- "All"
+    }
+    model_out
+  }) %>%
+  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
+
+# Not running because it says person_years its missing, but its not
+person_years_check <- poisson_data_grouped_filtered %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    tibble(
+      period = unique(df$period),
+      stroke_type = unique(df$stroke_type),
+      has_person_years = "person_years" %in% colnames(df),
+      all_non_missing = all(!is.na(df$person_years)),
+      all_positive = all(df$person_years > 0)
+    )
+  })
+print(person_years_check, n = Inf)
+
+# A tibble: 24 × 5
+   period    stroke_type has_person_years all_non_missing all_positive
+   <chr>     <chr>       <lgl>            <lgl>           <lgl>       
+ 1 1995-1999 Ischaemic   TRUE             TRUE            TRUE        
+ 2 1995-1999 PICH        TRUE             TRUE            TRUE        
+ 3 1995-1999 SAH         TRUE             TRUE            TRUE        
+ 4 1995-1999 Total       TRUE             TRUE            TRUE        
+ 5 2000-2004 Ischaemic   TRUE             TRUE            TRUE        
+ 6 2000-2004 PICH        TRUE             TRUE            TRUE        
+ 7 2000-2004 SAH         TRUE             TRUE            TRUE        
+ 8 2000-2004 Total       TRUE             TRUE            TRUE        
+ 9 2005-2009 Ischaemic   TRUE             TRUE            TRUE        
+10 2005-2009 PICH        TRUE             TRUE            TRUE        
+11 2005-2009 SAH         TRUE             TRUE            TRUE        
+12 2005-2009 Total       TRUE             TRUE            TRUE        
+13 2010-2014 Ischaemic   TRUE             TRUE            TRUE        
+14 2010-2014 PICH        TRUE             TRUE            TRUE        
+15 2010-2014 SAH         TRUE             TRUE            TRUE        
+16 2010-2014 Total       TRUE             TRUE            TRUE        
+17 2015-2019 Ischaemic   TRUE             TRUE            TRUE        
+18 2015-2019 PICH        TRUE             TRUE            TRUE        
+19 2015-2019 SAH         TRUE             TRUE            TRUE        
+20 2015-2019 Total       TRUE             TRUE            TRUE        
+21 2020-2024 Ischaemic   TRUE             TRUE            TRUE        
+22 2020-2024 PICH        TRUE             TRUE            TRUE        
+23 2020-2024 SAH         TRUE             TRUE            TRUE        
+24 2020-2024 Total       TRUE             TRUE            TRUE 
+
+# Ok lets run a safe version
+run_ethnicity_model_ageimd_nb <- function(data) {
+  if (nrow(data) == 0 || !"person_years" %in% names(data) || sum(data$cases, na.rm = TRUE) == 0 || sum(data$person_years, na.rm = TRUE) == 0) {
+    message("⚠️ Skipped: no data or person_years missing")
+    return(NULL)
+  }
+
+  data <- data %>%
+    mutate(
+      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+      age_group = factor(age_group),
+      imd_group = relevel(factor(imd_group), ref = "Q1")
+    )
+
+  if (length(unique(data$ethnicity_group)) < 2 || length(unique(data$imd_group)) < 2) {
+    message("⚠️ Skipped: insufficient factor levels")
+    return(NULL)
+  }
+
+  tryCatch({
+    model <- MASS::glm.nb(
+      formula = cases ~ ethnicity_group + age_group + imd_group + offset(log(person_years)),
       data = data
     )
 
@@ -1874,7 +2044,7 @@ data <- data %>%
       mutate(
         IRR_label = paste0(
           round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
-          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3))
         ),
         significant = p.value < 0.05
       )
@@ -1883,155 +2053,16 @@ data <- data %>%
     return(NULL)
   })
 }
-
-# Run the model
-results_ethnicity_adj_imdgroup <- poisson_data_grouped %>%
-  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
-  group_by(period, stroke_type) %>%
-  group_split() %>%
-  map_dfr(~{
-    df <- .
-    model_out <- run_ethnicity_model_full_adj(df)
-    if (!is.null(model_out)) {
-      model_out$period <- unique(df$period)
-      model_out$stroke_type <- unique(df$stroke_type)
-      model_out$sex <- "All"
-    }
-    model_out
-  }) %>%
-  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
-
-# Probably not the best fit, checking overdispersion
-calculate_dispersion <- function(model) {
-  if (is.null(model)) return(NA)
-  rdf <- df.residual(model)
-  if (rdf == 0) return(NA)
-  sum(residuals(model, type = "pearson")^2, na.rm = TRUE) / rdf
-}
-
 library(dplyr)
 library(purrr)
-library(tibble)
 
-# Check dispersion for all stroke types
-results_dispersion_all <- poisson_data_combined %>%
+results_ethnicity_adj_ageimd_nb <- poisson_data_grouped_filtered %>%
   filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
   group_by(period, stroke_type) %>%
   group_split() %>%
   map_dfr(~{
     df <- .
-    model <- run_ethnicity_model_full_adj(df, return_model = TRUE)
-    disp <- calculate_dispersion(model)
-
-    tibble(
-      period = unique(df$period),
-      stroke_type = unique(df$stroke_type),
-      dispersion = disp
-    )
-  })
-
-# View the results
-print(results_dispersion_all)
-
-write_xlsx(results_ethnicity_dispersion, path = "results_ethnicity_dispersion.xlsx")
-
-library(ggplot2)
-ggplot(results_ethnicity_dispersion, aes(x = stroke_type, y = dispersion, fill = stroke_type)) +
-  geom_col() +
-  facet_wrap(~period) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey40") +
-  labs(
-    title = "Overdispersion Statistic by Stroke Subtype and Period",
-    x = "Stroke Subtype",
-    y = "Dispersion Statistic"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(legend.position = "none")
-
-# Only early Total models (1995–2004) have dispersion > 1.5 — borderline.
-# Adding a sensitivity analysis using negative binomial regression for Total stroke in early periods.
-
-library(MASS)  # for glm.nb
-library(broom) # for tidy
-library(dplyr)
-
-run_ethnicity_model_full_adj <- function(data, model_type = "poisson", return_model = FALSE) {
-  
-  # Basic checks
-  if (
-    nrow(data) == 0 ||
-    !"imd_group" %in% names(data) ||
-    sum(data$cases, na.rm = TRUE) == 0 ||
-    sum(data$person_years, na.rm = TRUE) == 0
-  ) {
-    message("⚠️ Skipping: Empty data or missing required variables")
-    return(NULL)
-  }
-
-  # Clean and filter
-  data <- data %>%
-    filter(!is.na(cases), !is.na(person_years), person_years > 0) %>%
-    drop_na(ethnicity_group, age_group, sex, imd_group) %>%
-    mutate(
-      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
-      age_group = factor(age_group),
-      sex = factor(sex),
-      imd_group = factor(imd_group, levels = c("Q1", "Q2", "Q3–5"))
-    )
-
-  # Extra guard: at least two levels in key predictors
-  if (
-    n_distinct(data$ethnicity_group) < 2 ||
-    n_distinct(data$imd_group) < 2 ||
-    nrow(data) < 10
-  ) {
-    message("⚠️ Skipping: Not enough variation or rows to fit model")
-    return(NULL)
-  }
-
-  # Handle model fit
-  model <- tryCatch({
-    if (model_type == "nb") {
-      glm.nb(
-        cases ~ ethnicity_group + age_group + sex + imd_group + offset(log(person_years)),
-        data = data
-      )
-    } else {
-      glm(
-        cases ~ ethnicity_group + age_group + sex + imd_group,
-        offset = log(person_years),
-        family = poisson(link = "log"),
-        data = data
-      )
-    }
-  }, error = function(e) {
-    message("❌ Model error: ", conditionMessage(e))
-    return(NULL)
-  })
-
-  # Optionally return model object
-  if (return_model) return(model)
-  if (is.null(model)) return(NULL)
-
-  # Output cleaned IRR estimates
-  broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
-    filter(stringr::str_detect(term, "ethnicity_group")) %>%
-    mutate(
-      IRR_label = paste0(
-        round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
-        "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
-      ),
-      significant = p.value < 0.05
-    )
-}
-
-results_ethnicity_nb <- poisson_data_combined %>%
-  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
-  group_by(period, stroke_type) %>%
-  group_split() %>%
-  map_dfr(~{
-    df <- .
-    model_out <- run_ethnicity_model_full_adj(df, model_type = "nb")
+    model_out <- run_ethnicity_model_ageimd_nb(df)
     if (!is.null(model_out)) {
       model_out$period <- unique(df$period)
       model_out$stroke_type <- unique(df$stroke_type)
@@ -2041,64 +2072,51 @@ results_ethnicity_nb <- poisson_data_combined %>%
   }) %>%
   relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
 
-# Save these
-library(writexl)
-split_by_subtype <- function(df, prefix) {
-  split(df, df$stroke_type) %>%
-    setNames(paste0(prefix, "_", names(.)))
-}
-nb_sheets <- split_by_subtype(results_ethnicity_nb, "NB")
-poisson_sheets <- split_by_subtype(results_ethnicity_adj_imdgroup, "Poisson")
+# Results are very unstable in the smaller groups like PICH and SAH, 
+# Im going to run the poisson model and the NB model depending on the overdispersion result, only if dispersion is >1.5 ill do NB
 
-all_sheets <- c(nb_sheets, poisson_sheets)
+#Auto model selector function
+library(MASS)
+library(broom)
 
-write_xlsx(all_sheets, path = "stroke_ethnicity_model_results.xlsx")
-
-
-
-
-# ==== Dissagregated by sex just results no plots =====
-poisson_data_strat_sex <- poisson_data_combined %>%
-  filter(
-    !ethnicity_group %in% c("All"),
-    sex %in% c("Male", "Female")
-  )
-
-run_ethnicity_model_sexstrat_adj <- function(data) {
-  if (
-    nrow(data) == 0 ||
-    sum(data$cases, na.rm = TRUE) == 0 ||
-    sum(data$person_years, na.rm = TRUE) == 0 ||
-    !"imd_quintile" %in% names(data) ||
-    n_distinct(data$ethnicity_group) < 2
-  ) {
-    message("⚠️ Skipping due to insufficient data or lack of variation in ethnicity")
+run_ethnicity_model_ageimd_nb <- function(data, return_model = FALSE) {
+  if (nrow(data) == 0 || sum(data$cases, na.rm = TRUE) == 0 || sum(data$person_years, na.rm = TRUE) == 0) {
+    message("⚠️ Skipped: no data")
     return(NULL)
   }
 
   data <- data %>%
     filter(!is.na(person_years), person_years > 0) %>%
-    group_by(ethnicity_group, age_group, imd_quintile) %>%
-    filter(!(n() == 1 & cases <= 1)) %>%
+    group_by(ethnicity_group, age_group, imd_group) %>%
+    filter(!(n() == 1 & cases == 0)) %>%
     ungroup() %>%
     mutate(
       ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
       age_group = factor(age_group),
-      imd_quintile = factor(imd_quintile, levels = c("1", "2", "3", "4", "5"), ordered = TRUE)
+      imd_group = relevel(factor(imd_group), ref = "Q1")
     )
 
+  if (
+    length(unique(data$ethnicity_group)) < 2 ||
+    length(unique(data$imd_group)) < 2
+  ) {
+    message("⚠️ Skipped: insufficient factor levels")
+    return(NULL)
+  }
+
   tryCatch({
-    model <- glm(cases ~ ethnicity_group + age_group + imd_quintile,
-                 offset = log(person_years),
-                 family = poisson(link = "log"),
-                 data = data)
+    model <- glm.nb(
+      formula = cases ~ ethnicity_group + age_group + imd_group + offset(log(person_years)),
+      data = data
+    )
+    if (return_model) return(model)
 
     broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
       filter(stringr::str_detect(term, "ethnicity_group")) %>%
       mutate(
         IRR_label = paste0(
           round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
-          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, format = "f", digits = 3))
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3))
         ),
         significant = p.value < 0.05
       )
@@ -2108,84 +2126,341 @@ run_ethnicity_model_sexstrat_adj <- function(data) {
   })
 }
 
-results_ethnicity_sexstrat_adj <- poisson_data_strat_sex %>%
+run_ethnicity_model_ageimd_poisson <- function(data, return_model = FALSE) {
+  if (nrow(data) == 0 || sum(data$cases, na.rm = TRUE) == 0 || sum(data$person_years, na.rm = TRUE) == 0) {
+    message("⚠️ Skipped: no data")
+    return(NULL)
+  }
+
+  data <- data %>%
+    filter(!is.na(person_years), person_years > 0) %>%
+    group_by(ethnicity_group, age_group, imd_group) %>%
+    filter(!(n() == 1 & cases == 0)) %>%
+    ungroup() %>%
+    mutate(
+      ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+      age_group = factor(age_group),
+      imd_group = relevel(factor(imd_group), ref = "Q1")
+    )
+
+  if (
+    length(unique(data$ethnicity_group)) < 2 ||
+    length(unique(data$imd_group)) < 2
+  ) {
+    message("⚠️ Skipped: insufficient factor levels")
+    return(NULL)
+  }
+
+  tryCatch({
+    model <- glm(
+      formula = cases ~ ethnicity_group + age_group + imd_group + offset(log(person_years)),
+      family = poisson(link = "log"),
+      data = data
+    )
+    if (return_model) return(model)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(stringr::str_detect(term, "ethnicity_group")) %>%
+      mutate(
+        IRR_label = paste0(
+          round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3))
+        ),
+        significant = p.value < 0.05
+      )
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+library(dplyr)
+library(purrr)
+
+results_ethnicity_adj_ageimd_combined <- poisson_data_grouped_filtered %>%
+  filter(!ethnicity_group %in% c("All"), !sex %in% c("All")) %>%
+  group_by(period, stroke_type) %>%
+  group_split() %>%
+  map_dfr(~{
+    df <- .
+    p <- unique(df$period)
+    s <- unique(df$stroke_type)
+
+    dispersion <- results_dispersion_adj_ageimd %>%
+      filter(period == p, stroke_type == s) %>%
+      pull(dispersion)
+
+    if (length(dispersion) == 0) return(NULL)
+
+    if (dispersion > 1.5) {
+      model_out <- run_ethnicity_model_ageimd_nb(df)
+      model_type <- "NB"
+    } else {
+      model_out <- run_ethnicity_model_ageimd_poisson(df)
+      model_type <- "Poisson"
+    }
+
+    if (!is.null(model_out)) {
+      model_out$period <- p
+      model_out$stroke_type <- s
+      model_out$sex <- "All"
+      model_out$model_type <- model_type
+    }
+
+    model_out
+  }) %>%
+  relocate(term, estimate, conf.low, conf.high, IRR_label, model_type, .before = period)
+
+library(writexl)
+
+write_xlsx(results_ethnicity_adj_ageimd_combined, "results_ethnicity_adj_ageimd_combined.xlsx")
+
+# Sex dissagregated
+run_ethnicity_model_ageimd_sex <- function(data, return_model = FALSE) {
+  if (
+    nrow(data) == 0 ||
+    sum(data$cases, na.rm = TRUE) == 0 ||
+    sum(data$person_years, na.rm = TRUE) == 0
+  ) {
+    message("⚠️ Skipped: no data")
+    return(NULL)
+  }
+
+  data <- data %>%
+    filter(!is.na(person_years), person_years > 0) %>%
+    mutate(
+      ethnicity_group = factor(ethnicity_group),
+      ethnicity_group = relevel(ethnicity_group, ref = "White"),
+      age_group = factor(age_group),
+      imd_group = factor(imd_group),
+      imd_group = relevel(imd_group, ref = "Q1")
+    )
+
+  if (
+    length(unique(data$ethnicity_group)) < 2 ||
+    length(unique(data$imd_group)) < 2
+  ) {
+    message("⚠️ Skipped: insufficient factor levels")
+    return(NULL)
+  }
+
+  tryCatch({
+    model <- glm(
+      cases ~ ethnicity_group + age_group + imd_group,
+      offset = log(person_years),
+      family = poisson(link = "log"),
+      data = data
+    )
+    if (return_model) return(model)
+
+    broom::tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+      filter(stringr::str_detect(term, "ethnicity_group")) %>%
+      mutate(
+        IRR_label = paste0(
+          round(estimate, 2), " (", round(conf.low, 2), "–", round(conf.high, 2),
+          "), p=", ifelse(p.value < 0.001, "<0.001", formatC(p.value, digits = 3))
+        ),
+        significant = p.value < 0.05,
+        model_type = "Poisson"
+      )
+  }, error = function(e) {
+    message("❌ Model error: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+library(dplyr)
+library(purrr)
+
+# RUn sex dissagregated
+results_ethnicity_adj_ageimd_sexstrat <- poisson_data_grouped_filtered %>%
+  filter(!ethnicity_group %in% c("All"), sex %in% c("Male", "Female")) %>%
   group_by(period, stroke_type, sex) %>%
   group_split() %>%
   map_dfr(~{
     df <- .
-    message("▶️ Running: ", unique(df$period), " | ", unique(df$stroke_type), " | ", unique(df$sex))
-    model_out <- run_ethnicity_model_sexstrat_adj(df)
+    disp <- results_dispersion_adj_ageimd %>%
+      filter(period == unique(df$period), stroke_type == unique(df$stroke_type)) %>%
+      pull(dispersion)
+
+    model_out <- NULL
+    if (length(disp) == 1 && !is.na(disp)) {
+      if (disp > 1.5) {
+        model_out <- run_ethnicity_model_ageimd_nb(df)  # ← you’ve already defined this
+        if (!is.null(model_out)) model_out$model_type <- "NB"
+      } else {
+        model_out <- run_ethnicity_model_ageimd_sex(df)  # ← function above
+        if (!is.null(model_out)) model_out$model_type <- "Poisson"
+      }
+    }
+
     if (!is.null(model_out)) {
       model_out$period <- unique(df$period)
       model_out$stroke_type <- unique(df$stroke_type)
       model_out$sex <- unique(df$sex)
     }
+
     model_out
   }) %>%
-  relocate(term, estimate, conf.low, conf.high, IRR_label, .before = period)
+  relocate(term, estimate, conf.low, conf.high, IRR_label, model_type, .before = period)
 
-# Save them
+# Lets save everything
+# Load required libraries
+library(dplyr)
+library(flextable)
+library(writexl)
 
-# Create flextables for each stroke subtype (IMD adjusted, total population)
-ft_total_all_imd     <- make_ethnicity_flextable(results_ethnicity_adj_imd, "Total", FALSE)
-ft_ischaemic_all_imd <- make_ethnicity_flextable(results_ethnicity_adj_imd, "Ischaemic", FALSE)
-ft_pich_all_imd      <- make_ethnicity_flextable(results_ethnicity_adj_imd, "PICH", FALSE)
-ft_sah_all_imd       <- make_ethnicity_flextable(results_ethnicity_adj_imd, "SAH", FALSE)
+# Custom flextable function
+make_ethnicity_flextable <- function(df, subtype, sex_strata = FALSE) {
+  table_data <- df %>%
+    dplyr::filter(stroke_type == subtype) %>%
+    dplyr::mutate(
+      Ethnicity = gsub("ethnicity_group", "", term),
+      period = as.character(period)
+    )
 
-# Save to Excel (sheet names shortened for Excel's 31-char limit)
+  if (!sex_strata) {
+    table_data <- table_data %>%
+      dplyr::filter(sex == "All") %>%
+      dplyr::select(Ethnicity, period, IRR_label, significant)
+  } else {
+    table_data <- table_data %>%
+      dplyr::select(Ethnicity, sex, period, IRR_label, significant)
+  }
+
+  ft <- flextable::flextable(table_data)
+
+  # Bold significant rows
+  sig_rows <- which(table_data$significant)
+  if (length(sig_rows) > 0) {
+    ft <- flextable::bold(ft, i = sig_rows, bold = TRUE)
+  }
+
+  ft %>%
+    autofit() %>%
+    set_caption(paste("IRR by Ethnicity for", subtype, ifelse(sex_strata, "(by sex)", "(total population)")))
+}
+
+# Create formatted flextables for each combination
+ft_total_all     <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_combined, "Total", FALSE)
+ft_ischaemic_all <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_combined, "Ischaemic", FALSE)
+ft_pich_all      <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_combined, "PICH", FALSE)
+ft_sah_all       <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_combined, "SAH", FALSE)
+
+ft_total_sex     <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_sexstrat, "Total", TRUE)
+ft_ischaemic_sex <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_sexstrat, "Ischaemic", TRUE)
+ft_pich_sex      <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_sexstrat, "PICH", TRUE)
+ft_sah_sex       <- make_ethnicity_flextable(results_ethnicity_adj_ageimd_sexstrat, "SAH", TRUE)
+
+# Export to Excel with a separate sheet per subtype/strata
 write_xlsx(
   list(
-    "Total – All (IMD adj)"     = ft_total_all_imd$body$dataset,
-    "Isch – All (IMD adj)"      = ft_ischaemic_all_imd$body$dataset,
-    "PICH – All (IMD adj)"      = ft_pich_all_imd$body$dataset,
-    "SAH – All (IMD adj)"       = ft_sah_all_imd$body$dataset
+    "Total Strokes – All"      = ft_total_all$body$dataset,
+    "Ischaemic – All"          = ft_ischaemic_all$body$dataset,
+    "PICH – All"               = ft_pich_all$body$dataset,
+    "SAH – All"                = ft_sah_all$body$dataset,
+    "Total Strokes – By Sex"   = ft_total_sex$body$dataset,
+    "Ischaemic – By Sex"       = ft_ischaemic_sex$body$dataset,
+    "PICH – By Sex"            = ft_pich_sex$body$dataset,
+    "SAH – By Sex"             = ft_sah_sex$body$dataset
   ),
-  path = "ethnicity_IRR_total_IMD.xlsx"
-)
-# For IMD-adjusted sex-stratified models
-ft_total_sex_adj     <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "Total", TRUE)
-ft_ischaemic_sex_adj <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "Ischaemic", TRUE)
-ft_pich_sex_adj      <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "PICH", TRUE)
-ft_sah_sex_adj       <- make_ethnicity_flextable(results_ethnicity_sexstrat_adj, "SAH", TRUE)
-
-write_xlsx(
-  list(
-    "Total – Sex (IMD adj)"     = ft_total_sex_adj$body$dataset,
-    "Isch – Sex (IMD adj)"      = ft_ischaemic_sex_adj$body$dataset,
-    "PICH – Sex (IMD adj)"      = ft_pich_sex_adj$body$dataset,
-    "SAH – Sex (IMD adj)"       = ft_sah_sex_adj$body$dataset
-  ),
-  path = "ethnicity_IRRsexstrat_IMD.xlsx"
+  path = "ethnicity_IRR_by_period_IMD_adjusted.xlsx"
 )
 
+# ------------------------------------------------------------------
+# Nicely plot these
+# ------------------------------------------------------------------
+library(dplyr)
+library(forcats)
 
-# =====================
-And now plotting IMD adjusted ethnic poisson IRR
-# =====================
-
-# Cleaning
-results_total_clean_imd <- results_ethnicity_adj_imd %>%
-  filter(sex == "All") %>%
-  filter(grepl("ethnicity_group", term)) %>%
-  filter(!term %in% c("ethnicity_groupWhite", "ethnicity_groupAll")) %>%
+# Total population data
+results_total_clean <- results_ethnicity_adj_ageimd_combined %>%
+  filter(sex == "All", grepl("ethnicity_group", term)) %>%
   mutate(
     Ethnicity = gsub("ethnicity_group", "", term),
-    period = factor(period, levels = rev(levels(period))),
-    Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other"),
-    group = paste(period, Ethnicity, sep = " – ")
+    period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
+                                           "2010-2014", "2015-2019", "2020-2024"))),
+    Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other")
   )
 
-# Poisson plot
-plot_forest_ethnicity_dodged_imd <- function(subtype, x_limit = c(0.5, 3.5), filename = NULL) {
-  df <- results_total_clean_imd %>% filter(stroke_type == subtype)
-  
+# Sex-stratified data
+results_sex_clean <- results_ethnicity_adj_ageimd_sexstrat %>%
+  filter(grepl("ethnicity_group", term)) %>%
+  mutate(
+    Ethnicity = gsub("ethnicity_group", "", term),
+    period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
+                                           "2010-2014", "2015-2019", "2020-2024"))),
+    Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other")
+  )
+
+ethnicity_colours <- c(
+  "White" = "#7b3294",
+  "Black African" = "#af8dc3",
+  "Black Caribbean" = "#4575b4",
+  "Other" = "#d01c8b"
+)
+
+ethnicity_shapes <- c(
+  "White" = 16,
+  "Black African" = 17,
+  "Black Caribbean" = 15,
+  "Other" = 18
+)
+
+# Total population
+plot_forest_ethnicity_dodged <- function(subtype, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_total_clean %>% filter(stroke_type == subtype)
+
+  gg <- ggplot(df, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
+    geom_point(position = position_dodge(width = 0.7), size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                   height = 0.25, position = position_dodge(width = 0.7), alpha = 0.8) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
+    scale_color_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    scale_x_continuous(trans = "log", limits = x_limit,
+                       breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5),
+                       labels = scales::label_number(accuracy = 0.1)) +
+    labs(title = paste("IRR by Ethnicity (IMD adjusted) –", subtype),
+         x = "Incidence Rate Ratio (IRR)", y = "Period") +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          legend.position = "bottom")
+
+  if (!is.null(filename)) ggsave(filename, gg, width = 7.5, height = 6)
+  return(gg)
+}
+
+# Generate them
+# Total population
+plot_forest_ethnicity_dodged("Total", x_limit = c(0.5, 3.5), filename = "IRR_total_combined.png")
+plot_forest_ethnicity_dodged("Ischaemic", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_combined.png")
+
+# Truncate and modify x axis for PICH and SAH
+plot_forest_ethnicity_dodged <- function(subtype, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_total_clean %>% 
+    filter(stroke_type == subtype) %>%
+    mutate(
+      CI_exceeds = conf.high > max(x_limit),
+      CI_label = ifelse(CI_exceeds, ">", ""),
+      conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+      conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE)
+    )
+
   gg <- ggplot(df, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
     geom_point(position = position_dodge(width = 0.7), size = 3) +
     geom_errorbarh(
-      aes(xmin = conf.low, xmax = conf.high),
+      aes(xmin = conf.low.trunc, xmax = conf.high.trunc),
       height = 0.25,
       position = position_dodge(width = 0.7),
       alpha = 0.8
+    ) +
+    geom_text(
+      aes(label = CI_label),
+      hjust = -0.3,
+      position = position_dodge(width = 0.7),
+      size = 3,
+      na.rm = TRUE
     ) +
     geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
     scale_color_manual(values = ethnicity_colours) +
@@ -2193,9 +2468,9 @@ plot_forest_ethnicity_dodged_imd <- function(subtype, x_limit = c(0.5, 3.5), fil
     scale_x_continuous(
       trans = "log",
       limits = x_limit,
-      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5),
+      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 10, 13),
       labels = scales::label_number(accuracy = 0.1)
-    ) +    
+    ) +
     labs(
       title = paste("IRR by Ethnicity (IMD adjusted) –", subtype),
       x = "Incidence Rate Ratio (IRR)",
@@ -2206,106 +2481,80 @@ plot_forest_ethnicity_dodged_imd <- function(subtype, x_limit = c(0.5, 3.5), fil
       plot.title = element_text(hjust = 0.5, face = "bold"),
       legend.position = "bottom"
     )
-  
+
   if (!is.null(filename)) {
     ggsave(filename, gg, width = 7.5, height = 6)
   }
-  
+
   return(gg)
 }
 
-plot_forest_ethnicity_dodged_imd("Total", x_limit = c(0.5, 3.5), filename = "IRR_ethnicity_total_IMD.png")
-plot_forest_ethnicity_dodged_imd("Ischaemic", x_limit = c(0.5, 3.5), filename = "IRR_ethnicity_ischaemic_IMD.png")
-plot_forest_ethnicity_dodged("PICH", x_limit = c(0.5, 25), filename = "IRR_ethnicity_PICH_IMD_log.png")
+# PICH with limit up to 7
+plot_forest_ethnicity_dodged("PICH", x_limit = c(0.5, 7), filename = "IRR_pich_combined.png")
 
-plot_forest_ethnicity_dodged <- function(subtype, x_limit = c(0.5, 7), filename = NULL) {
-  df <- results_total_clean %>%
-    filter(stroke_type == subtype)
+# SAH with limit up to 13
+plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 13), filename = "IRR_sah_combined.png")
 
-  # Flag out-of-bound CIs
-  df <- df %>%
+
+# By sex
+plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_sex_clean %>%
+    filter(stroke_type == subtype, sex == sex_filter) %>%
     mutate(
-      CI_exceeds = conf.high > max(x_limit),
-      CI_label = ifelse(CI_exceeds, ">", "")
+      conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+      conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE),
+      CI_label = ifelse(conf.high > max(x_limit), ">", "")
     )
 
   gg <- ggplot(df, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
-    geom_point(position = position_dodge(width = 0.7), size = 3) +
-    geom_errorbarh(
-      aes(xmin = pmin(conf.low, max(x_limit)), 
-          xmax = pmin(conf.high, max(x_limit))),
-      height = 0.25,
-      position = position_dodge(width = 0.7),
-      alpha = 0.8
-    ) +
-    geom_text(
-      aes(label = CI_label),
-      hjust = -0.3,
-      position = position_dodge(width = 0.7),
-      size = 3,
-      na.rm = TRUE
-    ) +
+    geom_point(size = 3, position = position_dodge(width = 0.7)) +
+    geom_errorbarh(aes(xmin = conf.low.trunc, xmax = conf.high.trunc),
+                   height = 0.25, alpha = 0.8, position = position_dodge(width = 0.7)) +
+    geom_text(aes(label = CI_label), hjust = -0.3, size = 3,
+              position = position_dodge(width = 0.7), na.rm = TRUE) +
     geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
     scale_color_manual(values = ethnicity_colours) +
     scale_shape_manual(values = ethnicity_shapes) +
-    scale_x_continuous(
-      trans = "log",
-      limits = x_limit,
-      breaks = c(0.5, 1, 1.5, 2, 3, 4, 5, 6, 7),
-      labels = scales::label_number(accuracy = 0.1)
-    ) +
-    labs(
-      title = paste("IRR by Ethnicity (IMD Adjusted) –", subtype),
-      x = "Incidence Rate Ratio (IRR)",
-      y = "Period"
-    ) +
+    scale_x_continuous(trans = "log", limits = x_limit,
+                       breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5),
+                       labels = scales::label_number(accuracy = 0.1)) +
+    labs(title = paste("IRR by Ethnicity (IMD adjusted) –", subtype, "(", sex_filter, ")"),
+         x = "Incidence Rate Ratio (IRR)", y = "Period") +
     theme_minimal(base_size = 13) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      legend.position = "bottom"
-    )
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          legend.position = "bottom")
 
-  if (!is.null(filename)) {
-    ggsave(filename, gg, width = 7.5, height = 6)
-  }
-
+  if (!is.null(filename)) ggsave(filename, gg, width = 7.5, height = 6)
   return(gg)
 }
 
-plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 7))
-plot_forest_ethnicity_dodged("SAH", x_limit = c(0.5, 7), filename = "IRR_ethnicity_SAH_IMD_truncated.png")
+# Stratified by sex
+plot_forest_ethnicity_by_sex_sep("Total", "Female", x_limit = c(0.5, 3.5), filename = "IRR_total_female.png")
+plot_forest_ethnicity_by_sex_sep("Total", "Male", x_limit = c(0.5, 3.5), filename = "IRR_total_male.png")
+plot_forest_ethnicity_by_sex_sep("Ischaemic", "Female", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_female.png")
+plot_forest_ethnicity_by_sex_sep("Ischaemic", "Male", x_limit = c(0.5, 3.5), filename = "IRR_ischaemic_male.png")
 
-# == And now by sex dissagregated === 
-
-# Clean the results
-results_sexstrat_clean_split <- results_ethnicity_sexstrat_adj %>%
-  filter(grepl("ethnicity_group", term)) %>%
-  filter(!term %in% c("ethnicity_groupWhite", "ethnicity_groupAll")) %>%
-  mutate(
-    Ethnicity = gsub("ethnicity_group", "", term),
-    period = factor(period, levels = rev(levels(period))),
-    Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other")
-  ) %>%
-  split(.$sex)
-
-# Plot function
-plot_forest_ethnicity_by_sex <- function(df, subtype, sex_label, x_limit = c(0.5, 7), filename = NULL) {
-  df <- df %>% filter(stroke_type == subtype)
-
-  df <- df %>%
+# Truncated for PICH and SAH 
+plot_forest_ethnicity_by_sex_sep <- function(subtype, sex_filter, x_limit = c(0.5, 3.5), filename = NULL) {
+  df <- results_sex_clean %>%
+    filter(stroke_type == subtype, sex == sex_filter) %>%
     mutate(
+      period = factor(period, levels = rev(c("1995-1999", "2000-2004", "2005-2009", 
+                                             "2010-2014", "2015-2019", "2020-2024"))),
+      group = period,
       CI_exceeds = conf.high > max(x_limit),
-      CI_label = ifelse(CI_exceeds, ">", "")
+      CI_label = ifelse(CI_exceeds, ">", ""),
+      conf.low.trunc = pmax(conf.low, min(x_limit), na.rm = TRUE),
+      conf.high.trunc = pmin(conf.high, max(x_limit), na.rm = TRUE)
     )
 
-  gg <- ggplot(df, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
-    geom_point(position = position_dodge(width = 0.7), size = 3) +
+  gg <- ggplot(df, aes(x = estimate, y = group, color = Ethnicity, shape = Ethnicity)) +
+    geom_point(size = 3, position = position_dodge(width = 0.7)) +
     geom_errorbarh(
-      aes(xmin = pmin(conf.low, max(x_limit)),
-          xmax = pmin(conf.high, max(x_limit))),
+      aes(xmin = conf.low.trunc, xmax = conf.high.trunc),
       height = 0.25,
-      position = position_dodge(width = 0.7),
-      alpha = 0.8
+      alpha = 0.8,
+      position = position_dodge(width = 0.7)
     ) +
     geom_text(
       aes(label = CI_label),
@@ -2320,11 +2569,11 @@ plot_forest_ethnicity_by_sex <- function(df, subtype, sex_label, x_limit = c(0.5
     scale_x_continuous(
       trans = "log",
       limits = x_limit,
-      breaks = c(0.5, 1, 1.5, 2, 3, 4, 5, 6, 7),
-      labels = scales::label_number(accuracy = 0.1)
+      breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 7, 9, 13, 16),
+      labels = scales::label_number(accuracy = 1)
     ) +
     labs(
-      title = paste("IRR by Ethnicity (IMD adjusted) –", subtype, "–", sex_label),
+      title = paste("IRR by Ethnicity (IMD adjusted) –", subtype, "(", sex_filter, ")"),
       x = "Incidence Rate Ratio (IRR)",
       y = "Period"
     ) +
@@ -2340,95 +2589,13 @@ plot_forest_ethnicity_by_sex <- function(df, subtype, sex_label, x_limit = c(0.5
 
   return(gg)
 }
-
-# See them
-# Total and ischaemic
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "Total", "Female")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "Ischaemic", "Female")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Total", "Male")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Ischaemic", "Male")
-
-
-# Save them
-# Total and ischaemic
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "Total", "Female",
-                             filename = "IRR_ethnicity_Total_Female.png")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "Ischaemic", "Female",
-                             filename = "IRR_ethnicity_Ischaemic_Female.png")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Total", "Male",
-                             filename = "IRR_ethnicity_Total_Male.png")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "Ischaemic", "Male",
-                             filename = "IRR_ethnicity_Ischaemic_Male.png")
-
-# Improving PICH and SAH
-
-plot_forest_ethnicity_by_sex <- function(df, subtype, sex, x_limit = c(0.5, 10), filename = NULL) {
-  df_sub <- df %>%
-    filter(stroke_type == subtype) %>%
-    mutate(
-      Ethnicity = gsub("ethnicity_group", "", term),
-      period = factor(period, levels = rev(levels(period))),
-      Ethnicity = fct_relevel(Ethnicity, "Black African", "Black Caribbean", "Other"),
-      CI_exceeds = conf.high > max(x_limit),
-      CI_label = ifelse(CI_exceeds, ">", "")
-    )
-
-  gg <- ggplot(df_sub, aes(x = estimate, y = period, color = Ethnicity, shape = Ethnicity)) +
-    geom_point(position = position_dodge(width = 0.7), size = 3) +
-    geom_errorbarh(
-      aes(xmin = pmin(conf.low, max(x_limit)),
-          xmax = pmin(conf.high, max(x_limit))),
-      height = 0.25,
-      position = position_dodge(width = 0.7),
-      alpha = 0.8
-    ) +
-    geom_text(
-      aes(label = CI_label),
-      hjust = -0.3,
-      position = position_dodge(width = 0.7),
-      size = 3,
-      na.rm = TRUE
-    ) +
-    geom_vline(xintercept = 1, linetype = "dashed", color = "grey30") +
-    scale_color_manual(values = ethnicity_colours) +
-    scale_shape_manual(values = ethnicity_shapes) +
-    scale_x_continuous(
-      trans = "log",
-      limits = x_limit,
-      breaks = c(0.5, 1, 1.5, 2, 3, 4, 6, 8, 10, 15),
-      labels = scales::label_number(accuracy = 0.1)
-    ) +
-    labs(
-      title = paste("IRR by Ethnicity (IMD adjusted) –", subtype, "–", sex),
-      x = "Incidence Rate Ratio (IRR)",
-      y = "Period"
-    ) +
-    theme_minimal(base_size = 13) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold"),
-      legend.position = "bottom"
-    )
-
-  if (!is.null(filename)) {
-    ggsave(filename, gg, width = 7.5, height = 6)
-  }
-
-  return(gg)
-}
-
 # PICH
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "PICH", "Female", x_limit = c(0.5, 25))
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "PICH", "Male", x_limit = c(0.5, 15))
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Male, "PICH", "Male", x_limit = c(0.5, 25),
-                             filename = "IRR_ethnicity_PICH_Male.png")
-plot_forest_ethnicity_by_sex(results_sexstrat_clean_split$Female, "PICH", "Female", x_limit = c(0.5, 30),
-                             filename = "IRR_ethnicity_PICH_Female.png")
+plot_forest_ethnicity_by_sex_sep("PICH", "Female", x_limit = c(0.5, 7), filename = "IRR_pich_female.png")
+plot_forest_ethnicity_by_sex_sep("PICH", "Male", x_limit = c(0.5, 9), filename = "IRR_pich_male.png")
 
-
-# And SAH I just gave up :(
-library(dplyr)
-library(ggplot2)
-library(forcats)
+# SAH
+plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 16), filename = "IRR_sah_female.png")
+plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 7), filename = "IRR_sah_male.png")
 
 
 # ------------------------------------------------------------------
