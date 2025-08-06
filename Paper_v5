@@ -1641,7 +1641,6 @@ plot_forest_ethnicity_by_sex_sep("SAH", "Female", x_limit = c(0.5, 16), filename
 plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 25), filename = "IRR_sah_male_unadjusted.png")
 
 
-
 # ------------------------------------------------------------------
 # Ethnic Poisson Adjusted by IMD
 # ------------------------------------------------------------------
@@ -2614,6 +2613,131 @@ plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 7), filename = 
 # ------------------------------------------------------------------
 # Interaction terms
 # ------------------------------------------------------------------
+
+# Fit model with interaction
+model_interaction <- glm(
+  cases ~ ethnicity_group * imd_group + age_group + sex,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = poisson_data_grouped_filtered
+)
+
+# Check significance
+# Fit reduced model (no interaction)
+model_main <- glm(
+  cases ~ ethnicity_group + imd_group + age_group + sex,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = poisson_data_grouped_filtered
+)
+
+# Compare with likelihood ratio test
+anova(model_main, model_interaction, test = "Chisq")
+
+Analysis of Deviance Table
+
+Model 1: cases ~ ethnicity_group + imd_group + age_group + sex
+Model 2: cases ~ ethnicity_group * imd_group + age_group + sex
+  Resid. Df Resid. Dev Df Deviance Pr(>Chi)
+1      3025      10984                     
+2      3019      10974  6   10.502   0.1051
+
+# Stratified by sex has 0.1 of p, maybe because of power. Lets check without stratifying
+
+library(dplyr)
+
+# Main effects model
+model_main <- glm(
+  cases ~ ethnicity_group + imd_group + period + age_group,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = poisson_data_grouped_filtered
+)
+
+# Full interaction model
+model_interaction <- glm(
+  cases ~ ethnicity_group * imd_group * period + age_group,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = poisson_data_grouped_filtered
+)
+
+# Likelihood Ratio Test (LRT)
+anova(model_main, model_interaction, test = "Chisq")
+
+Analysis of Deviance Table
+
+Model 1: cases ~ ethnicity_group + imd_group + period + age_group
+Model 2: cases ~ ethnicity_group * imd_group * period + age_group
+  Resid. Df Resid. Dev Df Deviance  Pr(>Chi)    
+1      3021    11362.3                          
+2      2960     8966.9 61   2395.4 < 2.2e-16 ***
+
+# Lets do it by decade
+poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+  mutate(
+    period_decade = case_when(
+      period %in% c("1995-1999", "2000-2004") ~ "1995–2004",
+      period %in% c("2005-2009", "2010-2014") ~ "2005–2014",
+      period %in% c("2015-2019", "2020-2024") ~ "2015–2024"
+    )
+  )
+# Reference
+poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+  mutate(
+    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+    imd_group = factor(imd_group, levels = c("Q3-5", "Q2", "Q1")),  # Reference = Q3-5
+    period_decade = relevel(factor(period_decade), ref = "1995–2004")
+  )
+
+# Reference group: 
+poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+  mutate(
+    imd_binary = ifelse(imd_group == "Q3", "Least deprived", "More deprived"),
+    imd_binary = factor(imd_binary, levels = c("Least deprived", "More deprived")),
+    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
+    period_decade = relevel(factor(period_decade), ref = "1995–2004")
+  )
+
+#Model
+model_ethnicity_imd_period <- glm(
+  cases ~ ethnicity_group * imd_binary * period_decade + age_group,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = poisson_data_grouped_filtered
+)
+
+library(emmeans)
+
+Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
+  contrasts can be applied only to factors with 2 or more levels !!!!!!!!!!!!! 
+
+ERROR
+
+emm <- emmeans(model_ethnicity_imd_decade, ~ ethnicity_group | imd_group * period_decade, type = "response")
+
+marginal_results <- as.data.frame(emm) %>%
+  mutate(
+    IRR_label = paste0(
+      round(rate, 2), " (", round(asymp.LCL, 2), "–", round(asymp.UCL, 2), ")"
+    )
+  )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Preparing the data
 library(dplyr)
