@@ -2611,175 +2611,413 @@ plot_forest_ethnicity_by_sex_sep("SAH", "Male", x_limit = c(0.5, 7), filename = 
 # We cannot do that right now as we don't have individual data for the population (IMDs are averaged)
 
 # ------------------------------------------------------------------
-# Interaction terms
+# Interaction terms and ASIR by ses x ethnicity
 # ------------------------------------------------------------------
 
-# Fit model with interaction
-model_interaction <- glm(
-  cases ~ ethnicity_group * imd_group + age_group + sex,
-  offset = log(person_years),
-  family = poisson(link = "log"),
-  data = poisson_data_grouped_filtered
-)
-
-# Check significance
-# Fit reduced model (no interaction)
-model_main <- glm(
-  cases ~ ethnicity_group + imd_group + age_group + sex,
-  offset = log(person_years),
-  family = poisson(link = "log"),
-  data = poisson_data_grouped_filtered
-)
-
-# Compare with likelihood ratio test
-anova(model_main, model_interaction, test = "Chisq")
-
-Analysis of Deviance Table
-
-Model 1: cases ~ ethnicity_group + imd_group + age_group + sex
-Model 2: cases ~ ethnicity_group * imd_group + age_group + sex
-  Resid. Df Resid. Dev Df Deviance Pr(>Chi)
-1      3025      10984                     
-2      3019      10974  6   10.502   0.1051
-
-# Stratified by sex has 0.1 of p, maybe because of power. Lets check without stratifying
-
 library(dplyr)
+library(tidyr)
+library(writexl)
 
-# Main effects model
-model_main <- glm(
-  cases ~ ethnicity_group + imd_group + period + age_group,
-  offset = log(person_years),
-  family = poisson(link = "log"),
-  data = poisson_data_grouped_filtered
+# 1. Define ESP
+esp_df <- tibble(
+  age_group = rep(c("18-24", "25-29", "30-34", "35-39", "40-44", "45-49",
+                    "50-54", "55-59", "60-64", "65-69", "70-74", "75-79",
+                    "80-84", "85-89", "90+"), times = 2),
+  sex = rep(c("Male", "Female"), each = 15),
+  esp = c(
+    8200, 6000, 6500, 7000, 7000, 7000, 7000, 6500, 6000, 5500, 5000, 4000, 2500, 1500, 1000,  # Male
+    8200, 6000, 6500, 7000, 7000, 7000, 7000, 6500, 6000, 5500, 5000, 4000, 2500, 1500, 1000   # Female
+  )
 )
 
-# Full interaction model
-model_interaction <- glm(
-  cases ~ ethnicity_group * imd_group * period + age_group,
-  offset = log(person_years),
-  family = poisson(link = "log"),
-  data = poisson_data_grouped_filtered
-)
+esp_df_collapsed <- esp_df %>%
+  mutate(age_group = if_else(age_group %in% c("85-89", "90+"), "85+", age_group)) %>%
+  group_by(sex, age_group) %>%
+  summarise(esp = sum(esp), .groups = "drop")
 
-# Likelihood Ratio Test (LRT)
-anova(model_main, model_interaction, test = "Chisq")
+# 2. Recode age groups function
 
-Analysis of Deviance Table
+recode_age_group <- function(age_group) {
+  case_when(
+    age_group %in% c("18-19", "20-24")        ~ "18-24",
+    age_group == "25-29"                     ~ "25-29",
+    age_group == "30-34"                     ~ "30-34",
+    age_group == "35-39"                     ~ "35-39",
+    age_group == "40-44"                     ~ "40-44",
+    age_group == "45-49"                     ~ "45-49",
+    age_group == "50-54"                     ~ "50-54",
+    age_group == "55-59"                     ~ "55-59",
+    age_group == "60-64"                     ~ "60-64",
+    age_group == "65-69"                     ~ "65-69",
+    age_group == "70-74"                     ~ "70-74",
+    age_group == "75-79"                     ~ "75-79",
+    age_group == "80-84"                     ~ "80-84",
+    age_group %in% c("85-89", "90+", "85+")  ~ "85+",
+    TRUE ~ NA_character_
+  )
+}
 
-Model 1: cases ~ ethnicity_group + imd_group + period + age_group
-Model 2: cases ~ ethnicity_group * imd_group * period + age_group
-  Resid. Df Resid. Dev Df Deviance  Pr(>Chi)    
-1      3021    11362.3                          
-2      2960     8966.9 61   2395.4 < 2.2e-16 ***
+# 3. Prepare population data
 
-# Lets do it by decade
-poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+pop_standardised_imd <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
   mutate(
+    age_group = recode_age_group(age_group),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    imd_group = case_when(
+      imd_quintile == "1" ~ "Q1",
+      imd_quintile == "2" ~ "Q2",
+      imd_quintile %in% c("3", "4", "5") ~ "Q3–5",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024"
+    )
+  ) %>%
+  filter(!is.na(ethnicity_group), !is.na(age_group), !is.na(period), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+
+# 4. Prepare cases data (Total strokes)
+
+stroke_counts_total <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4, 5) ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    imd_group = case_when(
+      imd_quintile == "1" ~ "Q1",
+      imd_quintile == "2" ~ "Q2",
+      imd_quintile %in% c("3", "4", "5") ~ "Q3–5",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024"
+    ),
+    age_group = assign_age_group(age)
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(cases = n(), .groups = "drop")
+
+
+# 5. Join with population + ESP and calculate adjusted rates
+
+library(tidyr)
+
+standardisation_df <- stroke_counts_total %>%
+  full_join(pop_standardised_imd,
+            by = c("period", "ethnicity_group", "imd_group", "sex", "age_group")) %>%
+  full_join(esp_df, by = c("age_group", "sex")) %>%
+  mutate(
+    cases = replace_na(cases, 0),
+    person_years = replace_na(person_years, 0),
+    rate = if_else(person_years > 0, cases / person_years, 0),
+    weighted_rate = rate * esp,
+    se_component = if_else(person_years > 0, (esp^2 * cases) / (person_years^2), 0)
+  )
+
+total_imd_asir_with_ci <- standardisation_df %>%
+  group_by(period, ethnicity_group, imd_group) %>%
+  summarise(
+    ASIR = sum(weighted_rate, na.rm = TRUE),
+    SE = sqrt(sum(se_component, na.rm = TRUE)),
+    lower_CI = ASIR - 1.96 * SE,
+    upper_CI = ASIR + 1.96 * SE,
+    .groups = "drop"
+  ) %>%
+  mutate(across(c(ASIR, lower_CI, upper_CI), ~ round(.x, 1)),
+         asir_ci = paste0(ASIR, " (", lower_CI, "–", upper_CI, ")"))
+
+# ---------------------------
+This didnt work, lets collapse it into decades
+# ---------------------------
+library(dplyr)
+library(tidyr)
+library(writexl)
+
+# 1. Create period_decade in both datasets
+stroke_counts_total <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4, 5) ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    imd_group = case_when(
+      imd_quintile == "1" ~ "Q1",
+      imd_quintile == "2" ~ "Q2",
+      imd_quintile %in% c("3", "4", "5") ~ "Q3–5",
+      TRUE ~ NA_character_
+    ),
     period_decade = case_when(
-      period %in% c("1995-1999", "2000-2004") ~ "1995–2004",
-      period %in% c("2005-2009", "2010-2014") ~ "2005–2014",
-      period %in% c("2015-2019", "2020-2024") ~ "2015–2024"
+      year >= 1995 & year <= 2004 ~ "1995–2004",
+      year >= 2005 & year <= 2014 ~ "2005–2014",
+      year >= 2015 & year <= 2024 ~ "2015–2024"
+    ),
+    age_group = assign_age_group(age)
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period_decade, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(cases = n(), .groups = "drop")
+
+
+# 2. Prepare population denominators
+pop_standardised_imd <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
+  mutate(
+    age_group = recode_age_group(age_group),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period_decade = case_when(
+      year >= 1995 & year <= 2004 ~ "1995–2004",
+      year >= 2005 & year <= 2014 ~ "2005–2014",
+      year >= 2015 & year <= 2024 ~ "2015–2024"
+    ),
+    imd_group = case_when(
+      imd_quintile == 1 ~ "Q1",
+      imd_quintile == 2 ~ "Q2",
+      imd_quintile %in% c(3, 4, 5) ~ "Q3–5",
+      TRUE ~ NA_character_
     )
-  )
-# Reference
-poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
+  ) %>%
+  filter(!is.na(ethnicity_group), !is.na(age_group), !is.na(period_decade), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period_decade, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+# 3. Join with ESP weights and calculate ASIR
+standardisation_df <- stroke_counts_total %>%
+  full_join(pop_standardised_imd,
+            by = c("period_decade", "ethnicity_group", "imd_group", "sex", "age_group")) %>%
+  full_join(esp_df_collapsed, by = c("age_group", "sex")) %>%
   mutate(
-    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
-    imd_group = factor(imd_group, levels = c("Q3-5", "Q2", "Q1")),  # Reference = Q3-5
-    period_decade = relevel(factor(period_decade), ref = "1995–2004")
+    cases = replace_na(cases, 0),
+    person_years = replace_na(person_years, 0),
+    rate = if_else(person_years > 0, cases / person_years, 0),
+    weighted_rate = rate * esp,
+    se_component = if_else(person_years > 0, (esp^2 * cases) / (person_years^2), 0)
   )
 
-# Reference group: 
-poisson_data_grouped_filtered <- poisson_data_grouped_filtered %>%
-  mutate(
-    imd_binary = ifelse(imd_group == "Q3", "Least deprived", "More deprived"),
-    imd_binary = factor(imd_binary, levels = c("Least deprived", "More deprived")),
-    ethnicity_group = relevel(factor(ethnicity_group), ref = "White"),
-    period_decade = relevel(factor(period_decade), ref = "1995–2004")
-  )
-
-#Model
-model_ethnicity_imd_period <- glm(
-  cases ~ ethnicity_group * imd_binary * period_decade + age_group,
-  offset = log(person_years),
-  family = poisson(link = "log"),
-  data = poisson_data_grouped_filtered
-)
-
-library(emmeans)
-
-Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
-  contrasts can be applied only to factors with 2 or more levels !!!!!!!!!!!!! 
-
-ERROR
-
-emm <- emmeans(model_ethnicity_imd_decade, ~ ethnicity_group | imd_group * period_decade, type = "response")
-
-marginal_results <- as.data.frame(emm) %>%
-  mutate(
-    IRR_label = paste0(
-      round(rate, 2), " (", round(asymp.LCL, 2), "–", round(asymp.UCL, 2), ")"
-    )
-  )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Preparing the data
-library(dplyr)
-
-df_int <- poisson_data_combined %>%
-  filter(
-    stroke_type == "Total",  # Or "Ischaemic", "PICH", etc. if needed
-    ethnicity_group %in% c("White", "Black African", "Black Caribbean", "Other"),
-    !is.na(person_years),
-    !is.na(imd_quintile)
+# 4. Aggregate to get ASIRs and CIs
+total_imd_asir_with_ci <- standardisation_df %>%
+  group_by(period_decade, ethnicity_group, imd_group) %>%
+  summarise(
+    ASIR = sum(weighted_rate, na.rm = TRUE),
+    SE = sqrt(sum(se_component, na.rm = TRUE)),
+    lower_CI = ASIR - 1.96 * SE,
+    upper_CI = ASIR + 1.96 * SE,
+    .groups = "drop"
   ) %>%
   mutate(
-    ethnicity = relevel(factor(ethnicity_group), ref = "White"),
-    age_group = factor(age_group),
-    sex = factor(sex),
-    imd_binary = ifelse(imd_quintile == "1", "High deprivation", "Low/Medium deprivation"),
-    imd_binary = relevel(factor(imd_binary), ref = "Low/Medium deprivation")
+    across(c(ASIR, lower_CI, upper_CI), ~ round(.x, 1)),
+    asir_ci = paste0(ASIR, " (", lower_CI, "–", upper_CI, ")")
   )
 
-# Run the poisson with interaction terms
-model_interaction <- glm(
-  cases ~ ethnicity * imd_binary + age_group + sex + offset(log(person_years)),
-  family = poisson,
-  data = df_int
-)
+# 5. Save to Excel
+write_xlsx(total_imd_asir_with_ci, "total_stroke_ASIR_by_IMD_decade.xlsx")
 
-summary(model_interaction)
+library(ggplot2)
+library(dplyr)
 
-# Check interaction significance
-model_no_interaction <- glm(
-  cases ~ ethnicity + imd_binary + age_group + sex + offset(log(person_years)),
-  family = poisson,
-  data = df_int
-)
+# Example: assuming your ASIR results are in `total_imd_asir_with_ci`
+# Columns: period_decade, ethnicity_group, imd_group, ASIR, lower_CI, upper_CI
 
-anova(model_no_interaction, model_interaction, test = "LRT")
+# Rename for clarity
+# Rename for clarity with correct deprivation labels
+plot_data <- total_imd_asir_with_ci %>%
+  mutate(
+    imd_group = recode(imd_group,
+                       "Q1"   = "High deprivation",   # Q1 = most deprived
+                       "Q2"   = "Medium deprivation",
+                       "Q3–5" = "Low deprivation"),  # Q3–5 = least deprived
+    ethnicity_group = factor(
+      ethnicity_group,
+      levels = c("Black African", "Black Caribbean", "Other", "White")
+    ),
+    period_decade = factor(
+      period_decade,
+      levels = c("1995–2004", "2005–2014", "2015–2024")
+    )
+  )
 
-# Marginal effects
+# Plot
+ggplot(plot_data,
+       aes(x = ethnicity_group, y = ASIR, fill = imd_group)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(
+    aes(ymin = lower_CI, ymax = upper_CI),
+    position = position_dodge(width = 0.8),
+    width = 0.25
+  ) +
+  facet_wrap(~period_decade, nrow = 1) +
+  scale_fill_manual(values = c(
+    "High deprivation"   = "red",
+    "Medium deprivation" = "orange",
+    "Low deprivation"    = "blue"
+  )) +
+  labs(
+    title = "Age-Standardised Stroke Rates by Ethnicity and Deprivation",
+    x = "Ethnicity",
+    y = "Age-standardised rate per 100,000",
+    fill = "Deprivation Level"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0),
+    legend.position = "bottom"
+  )
+
+check_1995_2004 <- stroke_counts_total %>%
+  filter(period_decade == "1995–2004") %>%
+  group_by(ethnicity_group, imd_group) %>%
+  summarise(total_cases = sum(cases), .groups = "drop") %>%
+  left_join(
+    pop_standardised_imd %>%
+      filter(period_decade == "1995–2004") %>%
+      group_by(ethnicity_group, imd_group) %>%
+      summarise(total_py = sum(person_years), .groups = "drop"),
+    by = c("ethnicity_group", "imd_group")
+  ) %>%
+  mutate(
+    crude_rate_per_100k = round(100000 * total_cases / total_py, 1)
+  ) %>%
+  arrange(ethnicity_group, imd_group)
+
+check_1995_2004
+
+# The population Q3-Q5 in the first decade was too small, it inflates the incidence.
+# A tibble: 12 × 5
+   ethnicity_group imd_group total_cases total_py crude_rate_per_100k
+   <chr>           <chr>           <int>    <dbl>               <dbl>
+ 1 Black African   Q1                125  199151                 62.8
+ 2 Black African   Q2                 42   43794.                95.9
+ 3 Black African   Q3–5               12    5320                226. 
+ 4 Black Caribbean Q1                212  161016.               132. 
+ 5 Black Caribbean Q2                117   35466.               330. 
+ 6 Black Caribbean Q3–5                7    2080                336. 
+ 7 Other           Q1                103  166050.                62  
+ 8 Other           Q2                 50   67553.                74  
+ 9 Other           Q3–5               12   25980                 46.2
+10 White           Q1               1301 1029288.               126. 
+11 White           Q2                557  479094.               116. 
+12 White           Q3–5              220   82970                265.
+
+
+
+# Lets try again emmeans
+library(dplyr)
 library(emmeans)
+library(broom)
+library(writexl)
 
-emm <- emmeans(model_interaction, ~ ethnicity | imd_binary, type = "response")
-pairs(emm, by = "imd_binary", type = "response")
+# Re-do poisson data
+# 1. Total strokes case counts
+stroke_counts_total <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4, 5) ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    imd_group = case_when(
+      imd_quintile == "1" ~ "Q1",
+      imd_quintile == "2" ~ "Q2",
+      imd_quintile %in% c("3", "4", "5") ~ "Q3–5",
+      TRUE ~ NA_character_
+    ),
+    period_decade = case_when(
+      year >= 1995 & year <= 2004 ~ "1995–2004",
+      year >= 2005 & year <= 2014 ~ "2005–2014",
+      year >= 2015 & year <= 2024 ~ "2015–2024"
+    ),
+    age_group = assign_age_group(age)
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period_decade, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(cases = n(), .groups = "drop")
+
+# 2. Population denominators for all strokes
+pop_total <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
+  mutate(
+    age_group = recode_age_group(age_group),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period_decade = case_when(
+      year >= 1995 & year <= 2004 ~ "1995–2004",
+      year >= 2005 & year <= 2014 ~ "2005–2014",
+      year >= 2015 & year <= 2024 ~ "2015–2024"
+    ),
+    imd_group = case_when(
+      imd_quintile == 1 ~ "Q1",
+      imd_quintile == 2 ~ "Q2",
+      imd_quintile %in% c(3, 4, 5) ~ "Q3–5",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity_group), !is.na(age_group), !is.na(period_decade), !is.na(sex), !is.na(imd_group)) %>%
+  group_by(period_decade, ethnicity_group, imd_group, sex, age_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+# 3. Merge into poisson_data_grouped_filtered_total
+poisson_data_grouped_filtered_total <- stroke_counts_total %>%
+  full_join(pop_total, by = c("period_decade", "ethnicity_group", "imd_group", "sex", "age_group")) %>%
+  mutate(cases = replace_na(cases, 0))
+
+
+
+
+
+
+> check_counts
+# A tibble: 72 × 6
+   period    ethnicity_group imd_group total_cases total_py crude_rate_per_100k
+   <chr>     <chr>           <chr>           <int>    <dbl>               <dbl>
+ 1 1995-1999 Black African   Q1                 94   127217                73.9
+ 2 1995-1999 Black African   Q2                 33    14181               233. 
+ 3 1995-1999 Black African   Q3–5                6      180              3333. 
+ 4 1995-1999 Black Caribbean Q1                242   178979               135. 
+ 5 1995-1999 Black Caribbean Q2                119    22437               530. 
+ 6 1995-1999 Black Caribbean Q3–5                4      290              1379. 
+ 7 1995-1999 Other           Q1                 97    76863               126. 
+ 8 1995-1999 Other           Q2                 44    14072               313. 
+ 9 1995-1999 Other           Q3–5               12     4170               288. 
+10 1995-1999 White           Q1               1393  1411038                98.7
 
 
 
@@ -2795,35 +3033,9 @@ pairs(emm, by = "imd_binary", type = "response")
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 # ------------------------------------------------------------------
-# Let's keep doing it with 5-year groups
-# Interaction terms and marginal effects
+# FINISH
 # ------------------------------------------------------------------
 pop_with_imd <- read_excel("pop_with_imd.xlsx")
 
@@ -3026,7 +3238,7 @@ interaction_results_binary <- model_data_binary %>%
   map_dfr(run_poisson_binary_interaction)
 
 # Its much better the previous model by tertiles
-write_xlsx(interaction_results_final, "InteractionIMDtertilesDecade.xlsx")
+
 
 # Clean code for IMD tertiles
 library(dplyr)
