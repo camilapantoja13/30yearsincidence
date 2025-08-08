@@ -1306,20 +1306,500 @@ plot_pich
 plot_sah
 
 
+# === Now lets do sex stratified ======
+stroke_counts_sex <- slsr_clean_icd10_prepped %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# Crude
+crude_rates_sex <- pop_person_years %>%
+  left_join(stroke_counts_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = (stroke_n / person_years) * 100000
+  )
+
+# ESP
+esp_adjusted_sex <- crude_rates_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "Total",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# === Sex subtypes =====
+
+# Ischaemic
+slsr_isch_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "Ischaemic") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_isch_sex <- slsr_isch_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+crude_rates_isch_sex <- pop_person_years %>%
+  left_join(stroke_counts_isch_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = stroke_n / person_years * 100000
+  )
+
+esp_adjusted_isch_sex <- crude_rates_isch_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "Ischaemic",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# PICH
+slsr_pich_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "PICH") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_pich_sex <- slsr_pich_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+crude_rates_pich_sex <- pop_person_years %>%
+  left_join(stroke_counts_pich_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = stroke_n / person_years * 100000
+  )
+esp_adjusted_pich_sex <- crude_rates_pich_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "PICH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# SAH
+slsr_sah_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "SAH") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_sah_sex <- slsr_sah_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# == and create the tables ==
+esp_adjusted_isch_sex <- esp_adjusted_isch_sex %>% mutate(stroke_type = "Ischaemic")
+esp_adjusted_pich_sex <- esp_adjusted_pich_sex %>% mutate(stroke_type = "PICH")
+esp_adjusted_sah_sex  <- esp_adjusted_sah_sex  %>% mutate(stroke_type = "SAH")
+esp_adjusted_sex <- esp_adjusted_sex %>% mutate(stroke_type = "Total")
 
 
+# Combine
+sex_stratified_asir <- bind_rows(
+  esp_adjusted_sex,
+  esp_adjusted_isch_sex,
+  esp_adjusted_pich_sex,
+  esp_adjusted_sah_sex
+)
+
+# Add ASIR (95% CI) column
+sex_stratified_asir <- sex_stratified_asir %>%
+  filter(!is.na(period)) %>%
+  mutate(
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+asir_table_female <- sex_stratified_asir %>%
+  filter(sex == "Female") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+asir_table_male <- sex_stratified_asir %>%
+  filter(sex == "Male") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+writexl::write_xlsx(list(
+  Female_ASIRs = asir_table_female,
+  Male_ASIRs = asir_table_male
+), "sex_stratified_asir_by_subtype_incl_total.xlsx")
 
 
+# === Collapse across ethnicities for total Male and Female ASIRs ===
+crude_rates_total_sex <- crude_rates_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+# === Join ESP and calculate ASIR + CI for total males/females ===
+standardised_rates_total_sex <- crude_rates_total_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "Total",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_isch_sex <- crude_rates_isch_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_isch_sex <- crude_rates_total_isch_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "Ischaemic",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_pich_sex <- crude_rates_pich_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_pich_sex <- crude_rates_total_pich_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "PICH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_sah_sex <- crude_rates_sah_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_sah_sex <- crude_rates_total_sah_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "SAH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+sex_stratified_asir <- bind_rows(
+  sex_stratified_asir,
+  standardised_rates_total_isch_sex,
+  standardised_rates_total_pich_sex,
+  standardised_rates_total_sah_sex
+)
+
+# ===== Add stroke_type and Total labels =====
+esp_adjusted_sex        <- esp_adjusted_sex        %>% mutate(stroke_type = "Total")
+esp_adjusted_isch_sex   <- esp_adjusted_isch_sex   %>% mutate(stroke_type = "Ischaemic")
+esp_adjusted_pich_sex   <- esp_adjusted_pich_sex   %>% mutate(stroke_type = "PICH")
+esp_adjusted_sah_sex    <- esp_adjusted_sah_sex    %>% mutate(stroke_type = "SAH")
+
+standardised_rates_total_sex        <- standardised_rates_total_sex        %>% mutate(ethnicity_group = "Total", stroke_type = "Total")
+standardised_rates_total_isch_sex   <- standardised_rates_total_isch_sex   %>% mutate(ethnicity_group = "Total", stroke_type = "Ischaemic")
+standardised_rates_total_pich_sex   <- standardised_rates_total_pich_sex   %>% mutate(ethnicity_group = "Total", stroke_type = "PICH")
+standardised_rates_total_sah_sex    <- standardised_rates_total_sah_sex    %>% mutate(ethnicity_group = "Total", stroke_type = "SAH")
+
+# ===== Combine =====
+all_sex_stratified_asir <- bind_rows(
+  esp_adjusted_sex, esp_adjusted_isch_sex, esp_adjusted_pich_sex, esp_adjusted_sah_sex,
+  standardised_rates_total_sex,
+  standardised_rates_total_isch_sex,
+  standardised_rates_total_pich_sex,
+  standardised_rates_total_sah_sex
+)
+
+# ===== Clean and format =====
+all_sex_stratified_asir <- all_sex_stratified_asir %>%
+  filter(!is.na(period)) %>%
+  mutate(
+    `ASIR (95% CI)` = paste0(round(asir, 1), " (", round(lower_ci, 1), "–", round(upper_ci, 1), ")")
+  )
+
+# ===== Separate female and male tables =====
+asir_table_female <- all_sex_stratified_asir %>%
+  filter(sex == "Female") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("Total", "White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+asir_table_male <- all_sex_stratified_asir %>%
+  filter(sex == "Male") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("Total", "White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+# ===== Write to Excel =====
+writexl::write_xlsx(list(
+  Female_ASIRs = asir_table_female,
+  Male_ASIRs = asir_table_male
+), "sex_stratified_asir_by_subtype_with_totals.xlsx")
+
+# ==== Plot them ===== 
+# Ethnicity colours and shapes (same as before)
+ethnicity_colours <- c(
+  "White" = "#E64173",
+  "Black African" = "#984EA3",
+  "Black Caribbean" = "#FF7F00",
+  "Other" = "#377EB8"
+)
+
+ethnicity_shapes <- c(
+  "White" = 16,
+  "Black African" = 17,
+  "Black Caribbean" = 15,
+  "Other" = 18
+)
+
+# Function: Plot by stroke type and facet by sex
+plot_sex_subtype_asir <- function(df, stroke_subtype, sex_input) {
+  df %>%
+    filter(
+      stroke_type == stroke_subtype,
+      sex == sex_input,
+      ethnicity_group %in% names(ethnicity_colours)
+    ) %>%
+    ggplot(aes(
+      x = period, y = asir,
+      colour = ethnicity_group,
+      shape = ethnicity_group,
+      group = ethnicity_group
+    )) +
+    geom_point(size = 2.8) +
+    geom_line(linewidth = 1) +
+    geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.1) +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(
+      title = paste0("ASIRs: ", stroke_subtype, " (", sex_input, ")"),
+      y = "ASIR per 100,000",
+      x = "Period",
+      colour = "Ethnicity",
+      shape = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+# Total
+plot_total_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "Total", "Female")
+plot_total_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "Total", "Male")
+
+# Ischaemic
+plot_isch_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "Ischaemic", "Female")
+plot_isch_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "Ischaemic", "Male")
+
+# PICH
+plot_pich_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "PICH", "Female")
+plot_pich_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "PICH", "Male")
+
+# SAH
+plot_sah_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "SAH", "Female")
+plot_sah_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "SAH", "Male")
 
 
-
-
-
-
-
-
-
-
+plot_total_female
+plot_total_male
+plot_isch_female
+plot_isch_male
+plot_pich_female
+plot_pich_male 
+plot_sah_female
+plot_sah_male
 
 
 
