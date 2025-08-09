@@ -3763,6 +3763,552 @@ p_sah_female
 # Interaction models
 # ---------------------------------------------------------------
 
+# Sanity check on the DF
+check_counts <- function(df, name) {
+  df %>%
+    summarise(
+      n_rows      = n(),
+      total_cases = sum(stroke_n, na.rm = TRUE),
+      total_py    = sum(person_years, na.rm = TRUE)
+    ) %>%
+    mutate(dataset = name, .before = 1)
+}
+
+bind_rows(
+  check_counts(total_df_imd, "Total"),
+  check_counts(isch_df_imd,  "Ischaemic"),
+  check_counts(pich_df_imd,  "PICH"),
+  check_counts(sah_df_imd,   "SAH")
+)
+
+# -------- interactions --------------
+# Total strokes
+library(dplyr)
+library(forcats)
+library(emmeans)
+library(tibble)
+
+# --- 1) Clean & set references (full cohort) ---
+dat <- total_df_imd_dec %>%
+  filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+  mutate(
+    ethnicity_group = fct_relevel(as.factor(ethnicity_group), "White"),
+    imd_quintile    = fct_relevel(as.factor(imd_quintile), "3-5"), # ref = less deprived
+    age_group       = as.factor(age_group),
+    sex             = as.factor(sex)
+  ) %>% droplevels()
+
+# --- 2) Fit Poisson with interaction (age+sex adjusted) ---
+fit <- glm(
+  stroke_n ~ ethnicity_group * imd_quintile + age_group + sex,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = dat
+)
+
+# --- 3) Get IRRs for every Eth×IMD vs White 3–5 ---
+emm <- emmeans(fit, ~ ethnicity_group * imd_quintile)
+ref_idx <- with(as.data.frame(emm),
+                which(ethnicity_group == "White" & imd_quintile == "3-5"))
+
+contr <- contrast(
+  emm, method = "trt.vs.ctrl", ref = ref_idx,
+  type = "response", adjust = "none"
+)
+out <- as.data.frame(contr)  # columns: contrast, ratio, SE, df, z.ratio, p.value
+
+# --- 4) Parse the left-hand side "(Eth IMD) / (White 3-5)" robustly ---
+lhs <- sub("\\s*/\\s*\\(White 3-5\\)$", "", out$contrast)  # strip " / (White 3-5)"
+lhs <- sub("^\\(", "", lhs); lhs <- sub("\\)$", "", lhs)    # drop optional parens
+parsed <- tibble(lhs = lhs) %>%
+  tidyr::extract(lhs, into = c("ethnicity_group","imd_quintile"),
+                 regex = "^(.*)\\s+([0-9\\-]+)$", remove = TRUE) %>%
+  mutate(
+    ethnicity_group = trimws(ethnicity_group),
+    imd_quintile    = trimws(imd_quintile)
+  )
+
+# --- 5) Compute 95% CIs from ratio & SE (on response scale) ---
+log_irr <- log(out$ratio)
+se_log  <- out$SE / out$ratio
+ci_low  <- exp(log_irr - 1.96 * se_log)
+ci_high <- exp(log_irr + 1.96 * se_log)
+
+irr_table <- tibble(
+  ethnicity_group = parsed$ethnicity_group,
+  imd_quintile    = parsed$imd_quintile,
+  irr             = out$ratio,
+  conf.low        = ci_low,
+  conf.high       = ci_high,
+  p_value         = out$p.value
+)
+
+# --- 6) Add the reference row (White, 3–5) = 1.00 ---
+ref_row <- tibble(
+  ethnicity_group = "White",
+  imd_quintile    = "3-5",
+  irr = 1, conf.low = 1, conf.high = 1, p_value = NA_real_
+)
+
+interaction_total_full <- bind_rows(irr_table, ref_row) %>%
+  arrange(ethnicity_group, imd_quintile) %>%
+  mutate(irr_label = sprintf("%.2f (%.2f–%.2f)", irr, conf.low, conf.high))
+
+interaction_total_full
+
+# === Females and males ===
+run_eth_imd_interaction <- function(data, sex_filter = NULL) {
+  dat <- data %>%
+    filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+    mutate(
+      ethnicity_group = forcats::fct_relevel(as.factor(ethnicity_group), "White"),
+      imd_quintile    = forcats::fct_relevel(as.factor(imd_quintile), "3-5"),
+      age_group       = as.factor(age_group),
+      sex             = as.factor(sex)
+    )
+
+  if (!is.null(sex_filter)) {
+    dat <- droplevels(filter(dat, sex == sex_filter))
+  }
+
+  # Choose formula based on how many sex levels remain
+  has_two_sexes <- nlevels(dat$sex) >= 2
+  form <- if (has_two_sexes) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+
+  fit <- glm(form, offset = log(person_years), family = poisson(link = "log"), data = dat)
+
+  emm <- emmeans::emmeans(fit, ~ ethnicity_group * imd_quintile)
+  ref_idx <- with(as.data.frame(emm),
+                  which(ethnicity_group == "White" & imd_quintile == "3-5"))
+
+  contr <- emmeans::contrast(emm, method = "trt.vs.ctrl", ref = ref_idx,
+                             type = "response", adjust = "none")
+  out <- as.data.frame(contr)
+
+  # Parse "(Eth IMD) / (White 3-5)"
+  lhs <- sub("\\s*/\\s*\\(White 3-5\\)$", "", out$contrast)
+  lhs <- sub("^\\(", "", lhs); lhs <- sub("\\)$", "", lhs)
+  parsed <- tidyr::extract(tibble::tibble(lhs = lhs),
+                           lhs, into = c("ethnicity_group","imd_quintile"),
+                           regex = "^(.*)\\s+([0-9\\-]+)$")
+
+  # CIs from ratio & SE
+  log_irr <- log(out$ratio); se_log <- out$SE / out$ratio
+  ci_low  <- exp(log_irr - 1.96 * se_log)
+  ci_high <- exp(log_irr + 1.96 * se_log)
+
+  irr_table <- tibble::tibble(
+    ethnicity_group = parsed$ethnicity_group,
+    imd_quintile    = parsed$imd_quintile,
+    irr             = out$ratio,
+    conf.low        = ci_low,
+    conf.high       = ci_high,
+    p_value         = out$p.value
+  )
+
+  ref_row <- tibble::tibble(
+    ethnicity_group = "White", imd_quintile = "3-5",
+    irr = 1, conf.low = 1, conf.high = 1, p_value = NA_real_
+  )
+
+  irr_table %>%
+    dplyr::bind_rows(ref_row) %>%
+    dplyr::arrange(ethnicity_group, imd_quintile) %>%
+    dplyr::mutate(irr_label = sprintf("%.2f (%.2f–%.2f)", irr, conf.low, conf.high))
+}
+
+
+# Model for total and subtypes
+
+library(dplyr)
+library(forcats)
+library(emmeans)
+library(tidyr)
+library(tibble)
+library(readr)
+library(purrr)
+
+# Core helper: whole-cohort Ethnicity × IMD, ref = White & IMD "3-5"
+run_eth_imd_interaction_full <- function(data, sex_filter = NULL) {
+  dat <- data %>%
+    filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+    mutate(
+      ethnicity_group = fct_relevel(as.factor(ethnicity_group), "White"),
+      imd_quintile    = fct_relevel(as.factor(imd_quintile), "3-5"),
+      age_group       = as.factor(age_group),
+      sex             = as.factor(sex)
+    )
+
+  if (!is.null(sex_filter)) dat <- droplevels(filter(dat, sex == sex_filter))
+
+  # If only one sex remains, drop 'sex' from the model
+  form <- if (nlevels(dat$sex) >= 2) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+
+  fit <- glm(form, offset = log(person_years), family = poisson(link = "log"), data = dat)
+
+  emm <- emmeans::emmeans(fit, ~ ethnicity_group * imd_quintile)
+  ref_idx <- with(as.data.frame(emm), which(ethnicity_group == "White" & imd_quintile == "3-5"))
+
+  contr <- emmeans::contrast(emm, method = "trt.vs.ctrl", ref = ref_idx,
+                             type = "response", adjust = "none")
+  out <- as.data.frame(contr)  # ratio, SE, p.value, contrast text
+
+  # Parse "(Ethnicity IMD) / (White 3-5)"
+  lhs <- sub("\\s*/\\s*\\(White 3-5\\)$", "", out$contrast)
+  lhs <- sub("^\\(", "", lhs); lhs <- sub("\\)$", "", lhs)
+  parsed <- tidyr::extract(tibble(lhs = lhs), "lhs",
+                           into = c("ethnicity_group","imd_quintile"),
+                           regex = "^(.*)\\s+([0-9\\-]+)$")
+
+  # 95% CIs from ratio & SE (on response scale)
+  log_irr <- log(out$ratio); se_log <- out$SE / out$ratio
+  ci_low  <- exp(log_irr - 1.96 * se_log)
+  ci_high <- exp(log_irr + 1.96 * se_log)
+
+  irr_table <- tibble(
+    ethnicity_group = parsed$ethnicity_group,
+    imd_quintile    = parsed$imd_quintile,
+    irr             = out$ratio,
+    conf.low        = ci_low,
+    conf.high       = ci_high,
+    p_value         = out$p.value
+  )
+
+  # Add the explicit reference row
+  ref_row <- tibble(
+    ethnicity_group = "White", imd_quintile = "3-5",
+    irr = 1, conf.low = 1, conf.high = 1, p_value = NA_real_
+  )
+
+  bind_rows(irr_table, ref_row) %>%
+    arrange(ethnicity_group, imd_quintile) %>%
+    mutate(irr_label = sprintf("%.2f (%.2f–%.2f)", irr, conf.low, conf.high))
+}
+
+# Run for each stroke class and sex group (whole cohort)
+run_all_for_class_full <- function(df, stroke_class) {
+  bind_rows(
+    run_eth_imd_interaction_full(df)           %>% mutate(sex_group = "All"),
+    run_eth_imd_interaction_full(df, "Female") %>% mutate(sex_group = "Female"),
+    run_eth_imd_interaction_full(df, "Male")   %>% mutate(sex_group = "Male")
+  ) %>%
+    mutate(stroke_class = stroke_class, .before = 1)
+}
+
+all_results_full <- bind_rows(
+  run_all_for_class_full(total_df_imd, "Total"),
+  run_all_for_class_full(isch_df_imd,  "Ischaemic"),
+  run_all_for_class_full(pich_df_imd,  "PICH"),
+  run_all_for_class_full(sah_df_imd,   "SAH")
+) %>%
+  select(stroke_class, sex_group, ethnicity_group, imd_quintile,
+         irr, conf.low, conf.high, p_value, irr_label)
+
+# Save
+write_csv(all_results_full, "eth_imd_interactions_fullCohort_bySex_allClasses.csv")
+
+
+all_results_full <- all_results_full %>%
+  mutate(p_value = format_p(p_value)) %>%
+  dplyr::select(stroke_class, sex_group, ethnicity_group, imd_quintile,
+                irr, conf.low, conf.high, p_value, irr_label)
+ 
+library(openxlsx)
+
+# Split into list of data frames by stroke_class
+split_by_class <- split(all_results_full, all_results_full$stroke_class)
+
+# Create workbook and add each sheet
+wb <- createWorkbook()
+for (cls in names(split_by_class)) {
+  addWorksheet(wb, cls)
+  writeData(wb, cls, split_by_class[[cls]])
+}
+
+# Save workbook
+saveWorkbook(wb, "eth_imd_interactions_fullCohort_bySex_allClassespvalue.xlsx", overwrite = TRUE)
+
+# Ordering by ethnicity
+# Define ethnicity order
+eth_order <- c("Black African", "Black Caribbean", "Other", "White")
+sex_order <- c("All", "Female", "Male")
+
+# Reorder
+interactions_df <- all_results_full %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex_group = factor(sex_group, levels = sex_order)
+  ) %>%
+  arrange(ethnicity_group, sex_group, imd_quintile)
+
+# Split by stroke type and save
+wb_int <- createWorkbook()
+split_by_stroke <- split(interactions_df, interactions_df$stroke_class)
+for (nm in names(split_by_stroke)) {
+  addWorksheet(wb_int, nm)
+  writeData(wb_int, nm, split_by_stroke[[nm]])
+}
+saveWorkbook(wb_int, "eth_imd_interactions_fullCohort_bySex_allClasses_ORDERED.xlsx", overwrite = TRUE)
+
+
+#----------- Margins -----------------
+erfect — we can make this one clean function that:
+
+Runs the Poisson model for the full cohort (no decades)
+
+Generates a prediction grid with person_years = 1 (so predictions are rates)
+
+Age–sex standardises using your observed PY distribution as weights
+
+Uses a parametric bootstrap to get 95% CIs for the marginal incidence per 100k
+
+Runs for All, Female, Male
+
+Loops over Total, Ischaemic, PICH, SAH
+
+Saves one tab per stroke type in Excel.
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+# Model-based adjusted incidence per 100k (full cohort)
+marginal_incidence_full <- function(df, sex_filter = NULL) {
+  dat <- df %>%
+    filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+    mutate(
+      ethnicity_group = as.factor(ethnicity_group),
+      imd_quintile    = as.factor(imd_quintile),
+      age_group       = as.factor(age_group),
+      sex             = as.factor(sex)
+    )
+  if (!is.null(sex_filter)) dat <- droplevels(filter(dat, sex == sex_filter))
+
+  # weights: age×sex distribution of person-years in THIS subset
+  w_tbl <- dat %>%
+    group_by(age_group, sex) %>%
+    summarise(w = sum(person_years), .groups = "drop") %>%
+    mutate(w = w / sum(w))
+
+  # Poisson model
+  form <- if (nlevels(dat$sex) >= 2) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+  fit <- glm(form, offset = log(person_years), family = poisson(link = "log"), data = dat)
+
+  # Prediction grid: all Eth×IMD × age×sex, with PY=1 (offset=0 -> rates)
+  lev <- fit$xlevels
+  grid <- expand.grid(
+    ethnicity_group = lev$ethnicity_group,
+    imd_quintile    = lev$imd_quintile,
+    age_group       = lev$age_group,
+    sex             = if (is.null(lev$sex)) levels(dat$sex)[1] else lev$sex,
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  ) |> as_tibble() |>
+    mutate(person_years = 1) |>
+    left_join(w_tbl, by = c("age_group","sex")) |>
+    mutate(w = replace_na(w, 0))
+
+  # Predict expected counts with PY=1 -> rate
+  grid$rate <- predict(fit, newdata = grid, type = "response")
+
+  # Age–sex standardise (weighted mean of rates), per 100k
+  out <- grid %>%
+    group_by(ethnicity_group, imd_quintile) %>%
+    summarise(incidence_per_100k = sum(rate * w) * 1e5, .groups = "drop") %>%
+    mutate(sex_group = ifelse(is.null(sex_filter), "All", sex_filter)) %>%
+    arrange(ethnicity_group, imd_quintile)
+
+  out
+}
+
+# Use the full-cohort frames (no decades)
+stroke_data_list <- list(
+  Total     = total_df_imd,
+  Ischaemic = isch_df_imd,
+  PICH      = pich_df_imd,
+  SAH       = sah_df_imd
+)
+
+all_marginal_results <- lapply(names(stroke_data_list), function(type) {
+  df <- stroke_data_list[[type]]
+  bind_rows(
+    marginal_incidence_full(df),
+    marginal_incidence_full(df, "Female"),
+    marginal_incidence_full(df, "Male")
+  ) %>% mutate(stroke_class = type, .before = 1)
+})
+names(all_marginal_results) <- names(stroke_data_list)
+
+# Margins with CI 
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(MASS)   # mvrnorm
+
+marginal_incidence_full <- function(df, sex_filter = NULL, nboot = 1000) {
+  dat <- df %>%
+    filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+    mutate(
+      ethnicity_group = as.factor(ethnicity_group),
+      imd_quintile    = as.factor(imd_quintile),
+      age_group       = as.factor(age_group),
+      sex             = as.factor(sex)
+    )
+  if (!is.null(sex_filter)) dat <- droplevels(filter(dat, sex == sex_filter))
+
+  # Age–sex weights from observed PY in THIS subset
+  w_tbl <- dat %>%
+    group_by(age_group, sex) %>%
+    summarise(w = sum(person_years), .groups = "drop") %>%
+    mutate(w = w / sum(w))
+
+  # Model (drop 'sex' if only one level remains)
+  form <- if (nlevels(dat$sex) >= 2) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+  fit <- glm(form, offset = log(person_years), family = poisson("log"), data = dat)
+
+  # Prediction grid: all Eth×IMD × age×sex with PY=1 (offset=0)
+  lev <- fit$xlevels
+  grid <- expand.grid(
+    ethnicity_group = lev$ethnicity_group,
+    imd_quintile    = lev$imd_quintile,
+    age_group       = lev$age_group,
+    sex             = if (!is.null(lev$sex)) lev$sex else levels(dat$sex)[1],
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  ) %>%
+    as_tibble() %>%
+    mutate(person_years = 1) %>%
+    left_join(w_tbl, by = c("age_group","sex")) %>%
+    mutate(w = tidyr::replace_na(w, 0))
+
+  # Build model matrix for GRID using the model's terms & contrasts (this fixes your error)
+  TT <- delete.response(terms(fit))   # drop response from terms
+  X  <- model.matrix(TT, data = grid, contrasts.arg = fit$contrasts)
+
+  # Point estimate: eta = X %*% beta ; rate = exp(eta) (since offset = 0 with PY=1)
+  eta  <- as.vector(X %*% coef(fit))
+  rate <- exp(eta)
+  grid$rate <- rate
+
+  point_est <- grid %>%
+    group_by(ethnicity_group, imd_quintile) %>%
+    summarise(incidence_per_100k = sum(rate * w) * 1e5, .groups = "drop")
+
+  # ---- Parametric bootstrap for CIs ----
+  coefs <- coef(fit)
+  V     <- vcov(fit)
+
+  # Preallocate
+  k <- nrow(point_est)   # number of Eth×IMD combos
+  boot_mat <- matrix(NA_real_, nrow = nboot, ncol = k)
+
+  for (b in seq_len(nboot)) {
+    beta_b <- MASS::mvrnorm(1, mu = coefs, Sigma = V)
+    eta_b  <- as.vector(X %*% beta_b)
+    rate_b <- exp(eta_b)
+    vals_b <- tapply(rate_b * grid$w, INDEX = interaction(grid$ethnicity_group, grid$imd_quintile, drop = TRUE), sum)
+    boot_mat[b, ] <- as.numeric(vals_b) * 1e5
+  }
+
+  qs <- apply(boot_mat, 2, quantile, probs = c(0.025, 0.975), na.rm = TRUE)
+  ci_df <- tibble(
+    lower_CI = as.numeric(qs[1, ]),
+    upper_CI = as.numeric(qs[2, ])
+  )
+
+  out <- bind_cols(point_est, ci_df) %>%
+    mutate(sex_group = ifelse(is.null(sex_filter), "All", sex_filter)) %>%
+    arrange(ethnicity_group, imd_quintile)
+
+  out
+}
+stroke_data_list <- list(
+  Total     = total_df_imd,
+  Ischaemic = isch_df_imd,
+  PICH      = pich_df_imd,
+  SAH       = sah_df_imd
+)
+
+all_results <- lapply(names(stroke_data_list), function(type) {
+  df <- stroke_data_list[[type]]
+  bind_rows(
+    marginal_incidence_full(df, NULL,   nboot = 1000),
+    marginal_incidence_full(df, "Female", nboot = 1000),
+    marginal_incidence_full(df, "Male",   nboot = 1000)
+  ) %>% mutate(stroke_class = type, .before = 1)
+})
+names(all_results) <- names(stroke_data_list)
+
+library(openxlsx)
+wb <- createWorkbook()
+for (type in names(all_results)) {
+  addWorksheet(wb, type)
+  writeData(wb, type, all_results[[type]])
+}
+saveWorkbook(wb, "marginal_incidence_fullCohort_bySex_allClasses_withCIs.xlsx", overwrite = TRUE)
+
+all_results <- lapply(names(stroke_data_list), function(type) {
+  df <- stroke_data_list[[type]]
+  
+  bind_rows(
+    marginal_incidence_full(df, NULL,     nboot = 1000),
+    marginal_incidence_full(df, "Female", nboot = 1000),
+    marginal_incidence_full(df, "Male",   nboot = 1000)
+  ) %>%
+    mutate(
+      stroke_class = type, 
+      .before = 1,
+      ci_label = sprintf(
+        "%.1f (%.1f–%.1f)",
+        round(incidence_per_100k, 1),
+        round(lower_CI, 1),
+        round(upper_CI, 1)
+      )
+    )
+})
+names(all_results) <- names(stroke_data_list)
+
+# Save to Excel
+library(openxlsx)
+wb <- createWorkbook()
+for (type in names(all_results)) {
+  addWorksheet(wb, type)
+  writeData(wb, type, all_results[[type]])
+}
+saveWorkbook(wb, "marginal_incidence_fullCohort_bySex_allClasses_withCIs_formatted.xlsx", overwrite = TRUE)
+
+# Ordering  by ethnicity
+# Bind margins list into one df
+margins_df <- bind_rows(all_results) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex_group = factor(sex_group, levels = sex_order)
+  ) %>%
+  arrange(ethnicity_group, sex_group, imd_quintile)
+
+# Split by stroke type and save
+wb_marg <- createWorkbook()
+splitM_by_stroke <- split(margins_df, margins_df$stroke_class)
+for (nm in names(splitM_by_stroke)) {
+  addWorksheet(wb_marg, nm)
+  writeData(wb_marg, nm, splitM_by_stroke[[nm]])
+}
+saveWorkbook(wb_marg, "marginal_incidence_fullCohort_bySex_allClasses_withCIs_ORDERED.xlsx", overwrite = TRUE)
+
 
 
 
