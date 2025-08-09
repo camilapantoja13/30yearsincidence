@@ -4697,8 +4697,97 @@ for (st in levels(margins_df$stroke_class)) {
 }
 
 
+# === Describing the population =====
 
+library(dplyr)
+library(ggplot2)
 
+ethnicity_colours <- c(
+  "White" = "#E64173",          # bright pink
+  "Black African" = "#984EA3",  # deep purple
+  "Black Caribbean" = "#FF7F00",# orange
+  "Other" = "#377EB8"           # blue
+)
+
+pop_plot <- pop_person_years_imd %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(total_py = sum(person_years, na.rm = TRUE), .groups = "drop") %>%
+  group_by(period) %>%
+  mutate(perc = total_py / sum(total_py) * 100) %>%
+  ggplot(aes(x = period, y = perc, fill = ethnicity_group)) +
+  geom_bar(stat = "identity", colour = "black", width = 0.7) +
+  scale_fill_manual(values = ethnicity_colours, name = "Ethnicity") +
+  scale_y_continuous(expand = c(0, 0), labels = scales::percent_format(scale = 1)) +
+  labs(
+    x = "Period",
+    y = "Proportion of total person-years (%)",
+    title = "Ethnic composition of the base population by period"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+pop_plot
+
+# And by IMD
+
+library(dplyr)
+library(ggplot2)
+
+# Purple gradient for IMD
+imd_purples <- c("IMD 1"="#E6DAF4", "IMD 2"="#B48CD8", "IMD ≥3"="#7E57C2")
+eth_order   <- c("Black African","Black Caribbean","Other","White")
+
+# ---------- BY PERIOD ----------
+df_imd_period <- pop_person_years_imd %>%
+  mutate(
+    imd_grp = dplyr::recode(as.character(imd_quintile),
+                            "1"="IMD 1","2"="IMD 2","3-5"="IMD ≥3"),
+    ethnicity_group = factor(ethnicity_group, levels = eth_order)
+  ) %>%
+  group_by(period, ethnicity_group, imd_grp) %>%
+  summarise(py = sum(person_years, na.rm = TRUE), .groups = "drop") %>%
+  group_by(period, ethnicity_group) %>%
+  mutate(prop = py / sum(py)) %>%
+  ungroup()
+
+p_imd_by_period <- ggplot(df_imd_period,
+  aes(x = ethnicity_group, y = prop, fill = imd_grp)) +
+  geom_col(width = 0.75, colour = "white", linewidth = 0.2) +
+  scale_fill_manual(values = imd_purples, name = "Deprivation (IMD)") +
+  scale_y_continuous(labels = scales::percent_format(), expand = c(0,0)) +
+  labs(x = "Ethnicity", y = "Share of person-years",
+       title = "IMD composition by ethnicity and period") +
+  facet_wrap(~ period, nrow = 1) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"))
+# Reorder IMD factor so ≥3 is last
+df_imd_period <- df_imd_period %>%
+  mutate(imd_grp = factor(imd_grp, levels = c("IMD 1", "IMD 2", "IMD ≥3")))
+
+p_imd_by_period <- ggplot(df_imd_period,
+  aes(x = ethnicity_group, y = prop, fill = imd_grp)) +
+  geom_col(width = 0.75, colour = "white", linewidth = 0.2) +
+  scale_fill_manual(values = imd_purples, name = "Deprivation (IMD)") +
+  scale_y_continuous(labels = scales::percent_format(), expand = c(0,0)) +
+  labs(x = "Ethnicity", y = "Share of person-years",
+       title = "IMD composition by ethnicity and period") +
+  facet_wrap(~ period, nrow = 1) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1) # rotated labels
+  )
+
+p_imd_by_period
 
 
 
