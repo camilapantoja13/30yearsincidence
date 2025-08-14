@@ -4791,21 +4791,770 @@ p_imd_by_period
 
 
 
+# ------------------------------------------------------------------
+# Supplementary Table 2
+# ------------------------------------------------------------------
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(writexl)
 
 
+# 1) Helper to bin years (inclusive)
+cut_period <- function(y) {
+  cut(
+    y,
+    breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+    labels = c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024"),
+    include.lowest = TRUE, right = TRUE
+  )
+}
+
+# 2) Ethnicity mapping (reuse yours, keep Unknown so totals can include them)
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4,5) ~ "Other",
+      eth6cat == 99 ~ "Unknown",
+      TRUE ~ NA_character_
+    ),
+    period = cut_period(year)
+  )
+
+# base: period × ethnicity person-years
+pop_by_period <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995, year <= 2024) %>%
+  mutate(
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other","Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = cut_period(year)
+  ) %>%
+  filter(!is.na(ethnicity_group), !is.na(period)) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+# totals: period × "Total Population"
+pop_totals <- pop_by_period %>%
+  group_by(period) %>%
+  summarise(person_years = sum(person_years, na.rm = TRUE), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population")
+
+# final table
+pop_period <- bind_rows(pop_by_period, pop_totals) %>%
+  arrange(period, ethnicity_group)
+
+write_xlsx(pop_period, "pop_period.xlsx")
+
+# 4) CASES — totals should include ALL strokes (no subtype filter) and include Unknown in the Total Population line
+cases_total_all <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period)) %>%
+  group_by(period) %>%                     # includes Unknown ethnicity
+  summarise(cases = n(), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population", subtype = "Total strokes")
+
+cases_total_eth <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         ethnicity_group %in% c("White","Black Caribbean","Black African","Other")) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(cases = n(), .groups = "drop") %>%
+  mutate(subtype = "Total strokes")
+
+write_xlsx(cases_total_all, "cases_total_all.xlsx")
+
+# Subtype cases (only the 3 analytic subtypes), for Total Population (includes Unknown) and by ethnicity (excludes Unknown)
+analytic_subtypes <- c("Ischaemic","PICH","SAH")
+
+cases_sub_all <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         stroke_type %in% analytic_subtypes) %>%
+  group_by(period, subtype = stroke_type) %>%
+  summarise(cases = n(), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population")
+
+cases_sub_eth <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         ethnicity_group %in% c("White","Black Caribbean","Black African","Other"),
+         stroke_type %in% analytic_subtypes) %>%
+  group_by(period, ethnicity_group, subtype = stroke_type) %>%
+  summarise(cases = n(), .groups = "drop")
+
+cases_all <- bind_rows(cases_total_all, cases_total_eth, cases_sub_all, cases_sub_eth)
+
+write_xlsx(cases_all, "cases_all.xlsx")
+
+# 5) AGE (mean ± SD) — totals and by subtype, mirroring the cases keys
+age_total_all <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period)) %>%
+  group_by(period) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age, na.rm = TRUE), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population", subtype = "Total strokes")
+
+age_total_eth <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         ethnicity_group %in% c("White","Black Caribbean","Black African","Other")) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age, na.rm = TRUE), .groups = "drop") %>%
+  mutate(subtype = "Total strokes")
+
+age_sub_all <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         stroke_type %in% analytic_subtypes) %>%
+  group_by(period, subtype = stroke_type) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age, na.rm = TRUE), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population")
+
+age_sub_eth <- slsr_clean_icd10 %>%
+  filter(year >= 1995, year <= 2024, !is.na(period),
+         ethnicity_group %in% c("White","Black Caribbean","Black African","Other"),
+         stroke_type %in% analytic_subtypes) %>%
+  group_by(period, ethnicity_group, subtype = stroke_type) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age, na.rm = TRUE), .groups = "drop")
+
+age_all <- bind_rows(age_total_all, age_total_eth, age_sub_all, age_sub_eth) %>%
+  mutate(age_label = sprintf("%.1f (%.1f)", mean_age, sd_age))
+
+# Total first-ever strokes overall (all periods)
+total_cases_overall <- slsr_clean_icd10 %>% filter(!is.na(period)) %>% nrow()
+sum_cases_total_pop <- cases_total_all %>% summarise(n = sum(cases)) %>% pull(n)
+
+message("Total cases in data (1995–2024): ", total_cases_overall)
+message("Sum of Total Population cases across periods: ", sum_cases_total_pop)
+# Expect both to be 7,661 (or whatever your master total is)
 
 
+# Population by period (you already created pop_period)
+# Cases + Age tables (you already created cases_all and age_all)
+
+table2_long <- cases_all %>%
+  left_join(pop_period, by = c("period","ethnicity_group")) %>%
+  left_join(
+    age_all %>% dplyr::select(period, ethnicity_group, subtype, age_label),
+    by = c("period","ethnicity_group","subtype")
+  ) %>%
+  mutate(crude_ir = round((cases / person_years) * 1e5, 1)) %>%
+  arrange(
+    factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+    factor(subtype, levels = c("Total strokes","Ischaemic","PICH","SAH")),
+    period
+  )
+
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+
+table2_wide <- table2_long %>%
+  mutate(
+    period = factor(period, levels = period_levels),
+    age_col = paste0(as.character(period), " – Mean age (SD)"),
+    ir_col  = paste0(as.character(period), " – Crude IR")
+  ) %>%
+  select(ethnicity_group, subtype, age_col, age_label, ir_col, crude_ir) %>%
+  pivot_wider(
+    names_from = c(age_col, ir_col),
+    values_from = c(age_label, crude_ir)
+  ) %>%
+  arrange(
+    factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+    factor(subtype, levels = c("Total strokes","Ischaemic","PICH","SAH"))
+  )
+
+personyears_wide <- pop_period %>%
+  mutate(period = factor(period, levels = period_levels)) %>%
+  arrange(period, ethnicity_group) %>%
+  mutate(period_col = paste0(as.character(period), " – Person-years")) %>%
+  select(ethnicity_group, period_col, person_years) %>%
+  pivot_wider(
+    names_from = period_col,
+    values_from = person_years
+  ) %>%
+  arrange(factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")))
+
+write_xlsx(
+  list(
+    "Table2_long"        = table2_long,
+    "Table2_wide"        = table2_wide,
+    "Person_years_by_period" = personyears_wide
+  ),
+  path = "table2_updated.xlsx"
+)
 
 
+# === Pivoting ====
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+library(scales)
+
+#--- 1) Build the “person-years” rows in the same long structure as table2_long
+person_years_long <- pop_period %>%
+  mutate(
+    subtype      = "Person-years",
+    mean_age_sd  = "",                                # blank for person-years row
+    crude_ir     = comma(round(person_years, 0))      # show person-years in the Crude IR slot
+  ) %>%
+  select(ethnicity_group, subtype, period, mean_age_sd, crude_ir)
+
+#--- 2) Prepare the stroke rows (mean age label + crude IR formatted)
+stroke_rows_long <- table2_long %>%
+  mutate(
+    mean_age_sd = age_label,
+    crude_ir    = sprintf("%.1f", crude_ir)           # keep 1 dp for rates
+  ) %>%
+  select(ethnicity_group, subtype, period, mean_age_sd, crude_ir)
+
+#--- 3) Stack person-years + stroke rows and pivot to wide (period-pairs across)
+table2_for_wide <- bind_rows(person_years_long, stroke_rows_long)
+
+table2_wide <- table2_for_wide %>%
+  pivot_wider(
+    id_cols   = c(ethnicity_group, subtype),
+    names_from = period,
+    values_from = c(mean_age_sd, crude_ir),
+    names_glue = "{period}__{.value}"
+  ) %>%
+  # Order groups and subtypes to match your figure
+  arrange(
+    factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+    factor(subtype, levels = c("Person-years","Total strokes","Ischaemic","PICH","SAH"))
+  ) %>%
+  rename(Ethnicity = ethnicity_group, Subtype = subtype)
+
+#--- 4) Pretty column names: repeat “Mean age of stroke (SD)” + “Crude IR” for each period
+pretty_names <- function(df) {
+  old <- names(df)
+  new <- old
+  periods <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+  for (p in periods) {
+    new[old == paste0(p,"__mean_age_sd")] <- paste0(p, " – Mean age of stroke (SD)")
+    new[old == paste0(p,"__crude_ir")]    <- paste0(p, " – Crude IR")
+  }
+  names(df) <- new
+  df
+}
+table2_wide <- pretty_names(table2_wide)
+
+#--- 5) Export to Excel
+write_xlsx(table2_wide, "Table2_incidence_by_period_ethnicity.xlsx")
+
+# Optional: if you also want a CSV
+# write.csv(table2_wide, "Table2_incidence_by_period_ethnicity.csv", row.names = FALSE)
+
+# ---------------------------------------------------------
+# == Im redoing table 1== 
+------------------------------------------------------------
+library(dplyr)
+library(tidyr)
+library(writexl)
+
+# ---- Person-years by ethnicity (1995–2024) ----
+py_eth <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995, year <= 2024) %>%
+  mutate(ethnicity_group = case_when(
+    ethnicity_grouped == "White" ~ "White",
+    ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+    ethnicity_grouped == "Black African" ~ "Black African",
+    ethnicity_grouped %in% c("Black Other","Other") ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  group_by(ethnicity_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+py_all <- tibble(ethnicity_group = "All",
+                 person_years   = sum(py_eth$person_years, na.rm = TRUE))
+
+py_final <- bind_rows(py_all, py_eth)
+
+# ---- All strokes (n) & mean age (mean ± SD) ----
+all_strokes_eth <- slsr_clean_icd10 %>%
+  filter(ethnicity_group %in% c("White","Black African","Black Caribbean","Other")) %>%
+  count(ethnicity_group, name = "n_strokes")
+
+all_strokes_all <- slsr_clean_icd10 %>%
+  summarise(n_strokes = n(), .groups = "drop") %>%
+  mutate(ethnicity_group = "All")
+
+n_strokes_final <- bind_rows(all_strokes_all, all_strokes_eth)
+
+age_eth <- slsr_clean_icd10 %>%
+  filter(ethnicity_group %in% c("White","Black African","Black Caribbean","Other")) %>%
+  group_by(ethnicity_group) %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age,   na.rm = TRUE), .groups = "drop") %>%
+  mutate(age_label = sprintf("%.1f (%.1f)", mean_age, sd_age)) %>%
+  select(ethnicity_group, age_label)
+
+age_all <- slsr_clean_icd10 %>%
+  summarise(mean_age = mean(age, na.rm = TRUE),
+            sd_age   = sd(age,   na.rm = TRUE)) %>%
+  mutate(ethnicity_group = "All",
+         age_label = sprintf("%.1f (%.1f)", mean_age, sd_age)) %>%
+  select(ethnicity_group, age_label)
+
+age_final <- bind_rows(age_all, age_eth)
+
+# ---- Subtype counts & % within ethnicity ----
+analytic_subtypes <- c("Ischaemic","PICH","SAH")
+
+subtype_counts_eth <- slsr_clean_icd10 %>%
+  filter(ethnicity_group %in% c("White","Black African","Black Caribbean","Other"),
+         stroke_type %in% analytic_subtypes) %>%
+  count(ethnicity_group, stroke_type, name = "n") %>%
+  left_join(all_strokes_eth, by = "ethnicity_group") %>%
+  mutate(pct = 100 * n / n_strokes,
+         label = sprintf("%d (%.1f%%)", n, pct)) %>%
+  select(ethnicity_group, stroke_type, label)
+
+subtype_counts_all <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% analytic_subtypes) %>%
+  count(stroke_type, name = "n") %>%
+  mutate(ethnicity_group = "All") %>%
+  left_join(all_strokes_all, by = "ethnicity_group") %>%
+  mutate(pct = 100 * n / n_strokes,
+         label = sprintf("%d (%.1f%%)", n, pct)) %>%
+  select(ethnicity_group, stroke_type, label)
+
+subtype_block <- bind_rows(subtype_counts_all, subtype_counts_eth)
+
+# (Optional) Unknown stroke type – show counts only
+unknown_by_eth <- slsr_clean_icd10 %>%
+  mutate(stroke_type_clean = ifelse(stroke_type %in% analytic_subtypes, stroke_type, "Unknown")) %>%
+  filter(stroke_type_clean == "Unknown",
+         ethnicity_group %in% c("White","Black African","Black Caribbean","Other")) %>%
+  count(ethnicity_group, name = "n") %>%
+  mutate(label = sprintf("%d", n),
+         stroke_type = "Unknown") %>%
+  select(ethnicity_group, stroke_type, label)
+
+unknown_all <- slsr_clean_icd10 %>%
+  mutate(stroke_type_clean = ifelse(stroke_type %in% analytic_subtypes, stroke_type, "Unknown")) %>%
+  filter(stroke_type_clean == "Unknown") %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(ethnicity_group = "All",
+         stroke_type = "Unknown",
+         label = sprintf("%d", n)) %>%
+  select(ethnicity_group, stroke_type, label)
+
+subtype_block <- bind_rows(subtype_block, unknown_all, unknown_by_eth)
+
+# ---- Crude incidence per 100k PY for each subtype ----
+subtype_counts_for_ir <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% analytic_subtypes,
+         ethnicity_group %in% c("White","Black African","Black Caribbean","Other")) %>%
+  count(ethnicity_group, stroke_type, name = "n")
+
+subtype_counts_all_for_ir <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% analytic_subtypes) %>%
+  count(stroke_type, name = "n") %>%
+  mutate(ethnicity_group = "All")
+
+counts_ir <- bind_rows(subtype_counts_for_ir, subtype_counts_all_for_ir)
+
+ir_block <- counts_ir %>%
+  left_join(py_final, by = "ethnicity_group") %>%
+  mutate(rate = round(n / person_years * 1e5, 1)) %>%
+  select(ethnicity_group, stroke_type, rate)
+
+# =======================
+# Assemble pretty table
+# =======================
+
+# helper to wide-format a row-block
+to_wide <- function(df, value, rowname){
+  df %>%
+    pivot_wider(names_from = ethnicity_group, values_from = {{value}}) %>%
+    mutate(Measure = rowname) %>%
+    select(Measure, All, White, `Black African`, `Black Caribbean`, Other)
+}
+
+# 1) Source population
+block_py <- to_wide(py_final %>% mutate(val = scales::comma(round(person_years,0))),
+                    val, "Source population (person-years)")
+
+# 2) All strokes (n)
+block_n  <- to_wide(n_strokes_final %>% mutate(val = scales::comma(n_strokes)),
+                    val, "All strokes (n)")
+
+# 3) Age at first stroke
+block_age <- to_wide(age_final %>% rename(val = age_label),
+                     val, "Age at first stroke (mean ± SD)")
+
+# 4) Subtype rows (Ischaemic, PICH, SAH, Unknown)
+block_sub_is <- to_wide(subtype_block %>% filter(stroke_type=="Ischaemic") %>% rename(val = label),
+                        val, "Stroke subtypes n (% of all strokes) – Ischaemic")
+block_sub_pich <- to_wide(subtype_block %>% filter(stroke_type=="PICH") %>% rename(val = label),
+                          val, "Stroke subtypes n (% of all strokes) – PICH")
+block_sub_sah <- to_wide(subtype_block %>% filter(stroke_type=="SAH") %>% rename(val = label),
+                         val, "Stroke subtypes n (% of all strokes) – SAH")
+block_sub_unk <- to_wide(subtype_block %>% filter(stroke_type=="Unknown") %>% rename(val = label),
+                         val, "Stroke subtype – Unknown (n)")
+
+# 5) Crude incidence rows
+ir_is   <- to_wide(ir_block %>% filter(stroke_type=="Ischaemic") %>% rename(val = rate),
+                   val, "Crude incidence (per 100,000 PY) – Ischaemic")
+ir_pich <- to_wide(ir_block %>% filter(stroke_type=="PICH") %>% rename(val = rate),
+                   val, "Crude incidence (per 100,000 PY) – PICH")
+ir_sah  <- to_wide(ir_block %>% filter(stroke_type=="SAH") %>% rename(val = rate),
+                   val, "Crude incidence (per 100,000 PY) – SAH")
+
+ir_is   <- ir_is   %>% dplyr::mutate(dplyr::across(-Measure, ~sprintf("%.1f", as.numeric(.))))
+ir_pich <- ir_pich %>% dplyr::mutate(dplyr::across(-Measure, ~sprintf("%.1f", as.numeric(.))))
+ir_sah  <- ir_sah  %>% dplyr::mutate(dplyr::across(-Measure, ~sprintf("%.1f", as.numeric(.))))
+
+as_char_block <- function(df){
+  df %>% dplyr::mutate(dplyr::across(-Measure, as.character))
+}
+
+summary_table_v2 <- list(
+  block_py,
+  block_n,
+  block_age,
+  block_sub_is,
+  block_sub_pich,
+  block_sub_sah,
+  block_sub_unk,   # drop this line if you don't want the Unknown row
+  ir_is,
+  ir_pich,
+  ir_sah
+) |>
+  lapply(as_char_block) |>
+  dplyr::bind_rows()
+
+writexl::write_xlsx(summary_table_v2, "summary_table_ethnicity_v2.xlsx")
+
+============= Check why its failing ===========
+library(dplyr)
+library(forcats)
+
+# 1) Keep NA years and label their period explicitly
+slsr2 <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4,5) ~ "Other",
+      eth6cat == 99 ~ "Unknown",
+      TRUE ~ NA_character_
+    ),
+    year_best = year,   # <- use your existing 'year' as-is (may be NA)
+    period = cut(
+      year_best,
+      breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+      labels = c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024"),
+      include.lowest = TRUE, right = TRUE
+    ),
+    period = fct_explicit_na(period, "Unknown/NA")
+  )
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+library(forcats)
+
+# ---------------------------
+# 0) Helpers
+# ---------------------------
+cut_period <- function(y) {
+  cut(
+    y,
+    breaks = c(1994, 1999, 2004, 2009, 2014, 2019, 2024),
+    labels = c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024"),
+    include.lowest = TRUE, right = TRUE
+  )
+}
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+analytic_subtypes <- c("Ischaemic","PICH","SAH")
+eth_keep <- c("White","Black Caribbean","Black African","Other")
+
+# ---------------------------
+# 1) Rebuild analysis cohort used ONLY for Table 2
+# ---------------------------
+slsr_t2 <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4,5) ~ "Other",
+      eth6cat == 99 ~ "Unknown",
+      TRUE ~ NA_character_
+    ),
+    period = cut_period(year)
+  ) %>%
+  # keep only rows we can report in Table 2
+  filter(
+    ethnicity_group %in% eth_keep,
+    stroke_type %in% analytic_subtypes,
+    !is.na(period)
+  ) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = c("Black African","Black Caribbean","Other","White")),
+    period = factor(period, levels = period_levels),
+    subtype = stroke_type
+  )
+
+# ---------------------------
+# 2) Person-years (same periods, same 4 ethnicities) + Total Population
+# ---------------------------
+pop_by_period <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995, year <= 2024) %>%
+  mutate(
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other","Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = cut_period(year)
+  ) %>%
+  filter(ethnicity_group %in% eth_keep, !is.na(period)) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+pop_total <- pop_by_period %>%
+  group_by(period) %>%
+  summarise(person_years = sum(person_years), .groups = "drop") %>%
+  mutate(ethnicity_group = "Total Population")
+
+pop_period <- bind_rows(
+  pop_by_period,
+  pop_total
+) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+    period = factor(period, levels = period_levels)
+  )
+
+# ---------------------------
+# 3) CASES: subtypes + “Total strokes (analytic)”
+# ---------------------------
+# by ethnicity
+cases_eth_sub <- slsr_t2 %>%
+  count(period, ethnicity_group, subtype, name = "cases")
+
+# “analytic total” by ethnicity
+cases_eth_total <- cases_eth_sub %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(cases = sum(cases), .groups = "drop") %>%
+  mutate(subtype = "Total strokes")
+
+# TOTAL POPULATION = sum of the four ethnicities (so it matches)
+cases_tot_sub <- cases_eth_sub %>%
+  group_by(period, subtype) %>%
+  summarise(cases = sum(cases), .groups = "drop") %>%
+  mutate(ethnicity_group = factor("Total Population", levels = levels(pop_period$ethnicity_group)))
+
+cases_tot_total <- cases_tot_sub %>%
+  group_by(period) %>%
+  summarise(cases = sum(cases), .groups = "drop") %>%
+  mutate(ethnicity_group = factor("Total Population", levels = levels(pop_period$ethnicity_group)),
+         subtype = "Total strokes")
+
+cases_all <- bind_rows(cases_eth_sub, cases_eth_total, cases_tot_sub, cases_tot_total)
+
+# ---------------------------
+# 4) AGE (mean ± SD) from the SAME cohort
+# ---------------------------
+age_eth_sub <- slsr_t2 %>%
+  group_by(period, ethnicity_group, subtype) %>%
+  summarise(
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age   = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(age_label = sprintf("%.1f (%.1f)", mean_age, sd_age))
+
+age_eth_total <- slsr_t2 %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age   = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(subtype = "Total strokes",
+         age_label = sprintf("%.1f (%.1f)", mean_age, sd_age))
+
+age_tot_sub <- slsr_t2 %>%
+  group_by(period, subtype) %>%
+  summarise(
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age   = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = factor("Total Population", levels = levels(pop_period$ethnicity_group)),
+         age_label = sprintf("%.1f (%.1f)", mean_age, sd_age))
+
+age_tot_total <- slsr_t2 %>%
+  group_by(period) %>%
+  summarise(
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age   = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = factor("Total Population", levels = levels(pop_period$ethnicity_group)),
+         subtype = "Total strokes",
+         age_label = sprintf("%.1f (%.1f)", mean_age, sd_age))
+
+age_all <- bind_rows(age_eth_sub, age_eth_total, age_tot_sub, age_tot_total)
+
+# ---------------------------
+# 5) Build the long table and compute crude IR
+# ---------------------------
+table2_long <- cases_all %>%
+  left_join(pop_period, by = c("period","ethnicity_group")) %>%
+  left_join(age_all %>% select(period, ethnicity_group, subtype, age_label),
+            by = c("period","ethnicity_group","subtype")) %>%
+  mutate(crude_ir = round((cases / person_years) * 1e5, 1)) %>%
+  arrange(
+    factor(ethnicity_group, levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+    factor(subtype, levels = c("Person-years","Total strokes","Ischaemic","PICH","SAH")),
+    period
+  )
+
+# ---------------------------
+# 6) Sanity checks — these MUST all be TRUE
+# ---------------------------
+# (a) For every period, Total Population = sum of ethnicities (for each subtype)
+chk1 <- table2_long %>%
+  filter(ethnicity_group != "Total Population") %>%
+  group_by(period, subtype) %>%
+  summarise(sum_eth = sum(cases), .groups = "drop") %>%
+  inner_join(
+    table2_long %>% filter(ethnicity_group == "Total Population") %>% select(period, subtype, cases_tot = cases),
+    by = c("period","subtype")
+  ) %>%
+  mutate(ok = (sum_eth == cases_tot))
+
+stopifnot(all(chk1$ok))
+
+# (b) Within each period & ethnicity, "Total strokes" == sum(Ischaemic,PICH,SAH)
+chk2 <- table2_long %>%
+  filter(subtype %in% c("Ischaemic","PICH","SAH")) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(sum_sub = sum(cases), .groups = "drop") %>%
+  inner_join(
+    table2_long %>% filter(subtype == "Total strokes") %>% select(period, ethnicity_group, total_cases = cases),
+    by = c("period","ethnicity_group")
+  ) %>%
+  mutate(ok = (sum_sub == total_cases))
+
+stopifnot(all(chk2$ok))
+
+# If both checks pass, your counts, totals, and rates are internally consistent.
 
 
+# Rebuilt it
+library(dplyr)
+library(tidyr)
+library(writexl)
+library(scales)
+
+# ---------- 1) Wide COUNTS (n) ----------
+counts_long <- table2_long %>%
+  transmute(
+    ethnicity_group, subtype, period,
+    n = ifelse(subtype == "Person-years", NA_real_, cases)
+  )
+
+# add person-years in the same 'n' column for the Person-years rows
+py_long <- pop_period %>%
+  transmute(
+    ethnicity_group, subtype = "Person-years", period,
+    n = person_years
+  )
+
+counts_long <- bind_rows(py_long, counts_long)
+
+counts_wide <- counts_long %>%
+  mutate(period = as.character(period)) %>%
+  pivot_wider(
+    id_cols = c(ethnicity_group, subtype),
+    names_from = period,
+    values_from = n
+  ) %>%
+  arrange(factor(ethnicity_group,
+                 levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+          factor(subtype, levels = c("Person-years","Total strokes","Ischaemic","PICH","SAH"))) %>%
+  mutate(Total = rowSums(across(`1995-1999`:`2020-2024`), na.rm = TRUE)) %>%
+  rename(Ethnicity = ethnicity_group, Subtype = subtype)
+
+# pretty formatting for counts: commas for person-years and integers for case counts
+counts_wide_fmt <- counts_wide %>%
+  mutate(across(`1995-1999`:`2020-2024`,
+                ~ ifelse(Subtype == "Person-years", comma(round(.x)), as.character(as.integer(.x))))) %>%
+  mutate(Total = ifelse(Subtype == "Person-years", comma(round(Total)), as.character(as.integer(Total))))
+
+# ---------- 2) Wide MEAN AGE (SD) ----------
+age_wide <- table2_long %>%
+  mutate(age_label = ifelse(subtype == "Person-years", "", age_label)) %>%
+  select(ethnicity_group, subtype, period, age_label) %>%
+  pivot_wider(
+    id_cols = c(ethnicity_group, subtype),
+    names_from = period,
+    values_from = age_label
+  ) %>%
+  arrange(factor(ethnicity_group,
+                 levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+          factor(subtype, levels = c("Person-years","Total strokes","Ischaemic","PICH","SAH"))) %>%
+  rename(Ethnicity = ethnicity_group, Subtype = subtype)
+
+# ---------- 3) Wide CRUDE IR ----------
+ir_wide <- table2_long %>%
+  mutate(crude_ir = ifelse(subtype == "Person-years", NA, crude_ir)) %>%
+  select(ethnicity_group, subtype, period, crude_ir) %>%
+  pivot_wider(
+    id_cols = c(ethnicity_group, subtype),
+    names_from = period,
+    values_from = crude_ir
+  ) %>%
+  arrange(factor(ethnicity_group,
+                 levels = c("Total Population","Black African","Black Caribbean","Other","White")),
+          factor(subtype, levels = c("Person-years","Total strokes","Ischaemic","PICH","SAH"))) %>%
+  rename(Ethnicity = ethnicity_group, Subtype = subtype)
+
+# ---------- 4) Export ----------
+write_xlsx(
+  list(
+    "Table2_counts_n"      = counts_wide_fmt,
+    "Table2_mean_age_SD"   = age_wide,
+    "Table2_crude_IR"      = ir_wide,
+    "Table2_long_backend"  = table2_long,
+    "Person-years_backend" = pop_period
+  ),
+  path = "Table2_final_export.xlsx"
+)
 
 
+# === AGE difference testing ====
+library(dplyr)
+library(broom)
 
+# Filter to your analytic subtypes
+analytic_subtypes <- c("Ischaemic", "PICH", "SAH")
 
+age_model <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% analytic_subtypes,
+         ethnicity_group %in% c("White","Black Caribbean","Black African","Other")) %>%
+  lm(age ~ ethnicity_group + stroke_type, data = .)
 
-
-
+summary(age_model)
+tidy(age_model, conf.int = TRUE)
 
 
 
