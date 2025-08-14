@@ -5556,8 +5556,238 @@ age_model <- slsr_clean_icd10 %>%
 summary(age_model)
 tidy(age_model, conf.int = TRUE)
 
+# == The longer model ==
+library(dplyr)
+library(tidyr)
+
+age_summary <- slsr2 %>%
+  filter(period != "Unknown/NA") %>%
+  group_by(period, ethnicity_group, stroke_type) %>%
+  summarise(
+    n = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(mean_sd = sprintf("%.1f (%.1f)", mean_age, sd_age)) %>%
+  select(-mean_age, -sd_age) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = mean_sd
+  ) %>%
+  arrange(ethnicity_group, stroke_type)
+
+library(purrr)
+
+results_pvals <- slsr2 %>%
+  filter(period != "Unknown/NA") %>%
+  split(list(.$period, .$stroke_type)) %>%
+  map(~ pairwise.t.test(.x$age, .x$ethnicity_group, p.adjust.method = "bonferroni"))
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+
+# 1. Descriptive means
+age_summary <- slsr2 %>%
+  filter(period != "Unknown/NA") %>%
+  group_by(period, ethnicity_group, stroke_type) %>%
+  summarise(
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(mean_sd = sprintf("%.1f (%.1f)", mean_age, sd_age)) %>%
+  select(-mean_age, -sd_age) %>%
+  pivot_wider(names_from = period, values_from = mean_sd)
+
+# 2. Pairwise p-values
+pvals <- slsr2 %>%
+  filter(period != "Unknown/NA") %>%
+  group_by(period, stroke_type) %>%
+  group_map(~ {
+    res <- pairwise.t.test(.x$age, .x$ethnicity_group, p.adjust.method = "bonferroni")
+    broom::tidy(res)
+  }, .keep = TRUE) %>%
+  bind_rows(.id = "period_stroke") %>%
+  separate(period_stroke, into = c("period", "stroke_type"), sep = "\\.")
+
+# Now you can join p-values into the descriptive table
+
+# ------------------------------------------------------------
+# Pairwise p-values for age at first stroke by ethnicity
+# Within each period × stroke_type (Bonferroni adjusted)
+# ------------------------------------------------------------
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+library(writexl)
+
+# Choose the stroke types you want to test (omit "Unknown")
+analytic_subtypes <- c("Ischaemic", "PICH", "SAH")
+
+# LONG table: Period | Stroke type | Comparison | p_value | p_label
+pvals_long <- slsr2 %>%
+  filter(period != "Unknown/NA",
+         stroke_type %in% c("Ischaemic","PICH","SAH"),
+         !is.na(age)) %>%
+  group_by(period, stroke_type) %>%
+  group_modify(~{
+    g <- droplevels(factor(.x$ethnicity_group))
+    if (nlevels(g) < 2) {
+      return(tibble(comparison = character(), p_value = numeric(), p_label = character()))
+    }
+
+    pw <- pairwise.t.test(.x$age, g, p.adjust.method = "bonferroni")
+    pm <- pw$p.value
+    if (is.null(pm)) {
+      return(tibble(comparison = character(), p_value = numeric(), p_label = character()))
+    }
+
+    # Ensure dimnames exist
+    if (is.null(dimnames(pm))) {
+      dimnames(pm) <- list(levels(g)[-1], levels(g)[-length(levels(g))])
+    }
+
+    as_tibble(as.table(pm), .name_repair = "minimal") %>%
+      setNames(c("group1", "group2", "p_value")) %>%
+      filter(!is.na(p_value)) %>%
+      mutate(
+        comparison = paste(group1, "vs", group2),
+        p_label = ifelse(p_value < 0.001, "<0.001",
+                         formatC(p_value, format = "f", digits = 3))
+      ) %>%
+      select(comparison, p_value, p_label)
+  }) %>%
+  ungroup() %>%
+  arrange(stroke_type, period, comparison)
+
+# WIDE table with one column per period (p-value labels)
+pvals_wide <- pvals_long %>%
+  dplyr::select(period, stroke_type, comparison, p_label) %>%
+  tidyr::pivot_wider(names_from = period, values_from = p_label) %>%
+  dplyr::arrange(stroke_type, comparison)
+
+# 3) (Optional) keep your descriptive means table together with p-values
+#    Write both long & wide versions to Excel
+write_xlsx(
+  list(
+    "Age_by_ethnicity_means" = age_summary_pub,  # your existing descriptive table
+    "Age_pairwise_pvals_long" = pvals_long,
+    "Age_pairwise_pvals_wide" = pvals_wide
+  ),
+  path = "age_ethnicity_pairwise_pvalues.xlsx"
+)
+
+# == Adding all strokes ===
+library(dplyr)
+library(tidyr)
+library(broom)
+
+# Function to compute Bonferroni-adjusted pairwise p-values for each period & stroke_type
+get_pairwise_pvals <- function(data) {
+  data %>%
+    filter(period != "Unknown/NA", !is.na(age)) %>%
+    group_by(period, stroke_type) %>%
+    group_modify(~{
+      g <- droplevels(factor(.x$ethnicity_group))
+      if (nlevels(g) < 2) {
+        return(tibble(comparison = character(), p_label = character()))
+      }
+      
+      pw <- pairwise.t.test(.x$age, g, p.adjust.method = "bonferroni")
+      pm <- pw$p.value
+      if (is.null(pm)) {
+        return(tibble(comparison = character(), p_label = character()))
+      }
+      
+      as_tibble(as.table(pm), .name_repair = "minimal") %>%
+        rename(group1 = 1, group2 = 2, p_value = n) %>%
+        filter(!is.na(p_value)) %>%
+        mutate(
+          comparison = paste(group1, "vs", group2),
+          p_label = ifelse(p_value < 0.001, "<0.001",
+                           formatC(p_value, format = "f", digits = 3))
+        ) %>%
+        select(comparison, p_label)
+    }) %>%
+    ungroup()
+}
+
+# 1) Prepare a dataset that includes an "All strokes" category
+slsr_all <- slsr2 %>%
+  filter(period != "Unknown/NA", !is.na(age)) %>%
+  mutate(stroke_type = ifelse(stroke_type %in% c("Ischaemic", "PICH", "SAH"),
+                              stroke_type, "Unknown/Other"))
+
+# Add the All strokes category
+slsr_with_all <- bind_rows(
+  slsr_all,
+  slsr_all %>% mutate(stroke_type = "All strokes")
+)
+
+# 2) Compute p-values
+pvals <- slsr_with_all %>%
+  group_by(stroke_type, period) %>%
+  group_modify(~{
+    g <- droplevels(factor(.x$ethnicity_group))
+    if (nlevels(g) < 2) {
+      return(tibble(comparison = character(), p_label = character()))
+    }
+    
+    pw <- pairwise.t.test(.x$age, g, p.adjust.method = "bonferroni")
+    pm <- pw$p.value
+    if (is.null(pm)) {
+      return(tibble(comparison = character(), p_label = character()))
+    }
+    
+    as_tibble(as.table(pm), .name_repair = "minimal") %>%
+      rename(group1 = 1, group2 = 2, p_value = n) %>%
+      filter(!is.na(p_value)) %>%
+      mutate(
+        comparison = paste(group1, "vs", group2),
+        p_label = ifelse(p_value < 0.001, "<0.001",
+                         formatC(p_value, format = "f", digits = 3))
+      ) %>%
+      select(comparison, p_label)
+  }) %>%
+  ungroup()
+
+# 3) Pivot wider: periods as columns
+pvals_wide <- pvals %>%
+  pivot_wider(
+    names_from = period,
+    values_from = p_label
+  ) %>%
+  arrange(factor(stroke_type, levels = c("All strokes", "Ischaemic", "PICH", "SAH", "Unknown/Other")),
+          comparison)
+
+pvals_wide
 
 
+age_tbl <- age_summary_pub %>%
+  rename(comparison = ethnicity_group)
+
+merged_age_pvals <- age_tbl %>%
+  left_join(pvals_wide, by = c("stroke_type", "comparison")) %>%
+  mutate(stroke_type = factor(
+    stroke_type,
+    levels = c("All strokes","Ischaemic","PICH","SAH")
+  )) %>%
+  arrange(stroke_type, comparison)
+
+library(dplyr)
+library(stringr)
+library(writexl)
+
+age_tbl <- age_summary_pub %>%
+  dplyr::rename(comparison = ethnicity_group) %>%
+  mutate(comparison = trimws(as.character(comparison)))
+
+pvals_wide <- pvals_wide %>%
+  mutate(comparison = trimws(as.character(comparison)))
 
 
 
