@@ -1,0 +1,194 @@
+# Fit the poisson model
+fit <- glm(
+  stroke_n ~ ethnicity_group * imd_quintile + age_group + sex,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = total_df_imd
+)
+
+# Call the margins
+library(margins)
+
+m <- margins(fit, variables = c("ethnicity_group", "imd_quintile"),
+             type = "response") 
+summary(m)
+
+ m <- margins(fit, variables = c("ethnicity_group", "imd_quintile"),
++              type = "response") 
+> summary(m)
+                         factor     AME     SE        z      p   lower   upper
+ ethnicity_groupBlack Caribbean -0.7914 0.2808  -2.8181 0.0048 -1.3419 -0.2410
+           ethnicity_groupOther -3.2535 0.2542 -12.7989 0.0000 -3.7517 -2.7553
+           ethnicity_groupWhite -2.8232 0.2235 -12.6330 0.0000 -3.2612 -2.3852
+                  imd_quintile2 -2.3092 0.1129 -20.4591 0.0000 -2.5304 -2.0879
+                imd_quintile3-5 -2.3885 0.1560 -15.3064 0.0000 -2.6944 -2.0827
+
+# Replicate age and sex 
+req <- c("dplyr","tidyr","tibble","margins","openxlsx","MASS")
+new <- req[!(req %in% installed.packages()[,"Package"])]
+if (length(new)) install.packages(new)
+invisible(lapply(req, library, character.only = TRUE))
+cat("Packages loaded.\n")
+
+df <- total_df_imd  # <- change to isch_df_imd, pich_df_imd, sah_df_imd later
+
+# Basic checks
+cat("Rows:", nrow(df), "\n")
+print(
+  df %>%
+    summarise(
+      n = n(),
+      n_na_stroke = sum(!is.finite(stroke_n)),
+      n_bad_py    = sum(!is.finite(person_years) | person_years <= 0)
+    )
+)
+
+# Glimpse key vars
+print(
+  df %>% dplyr::select(stroke_n, person_years, ethnicity_group, imd_quintile, age_group, sex) %>% head()
+)
+
+# (Optional) sanity-check column names
+names(df)
+
+# Confirm the levels
+dat <- df %>%
+  filter(is.finite(stroke_n), is.finite(person_years), person_years > 0) %>%
+  mutate(across(c(ethnicity_group, imd_quintile, age_group, sex), ~ as.factor(.x)))
+
+cat("Levels:\n")
+print(lapply(dat[c("ethnicity_group","imd_quintile","age_group","sex")], levels))
+
+# Fit Poisson 
+form <- stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+fit  <- glm(form, offset = log(person_years), family = poisson(link="log"), data = dat)
+
+cat("Model fitted. Coef count:", length(coef(fit)), "\n")
+print(head(coef(summary(fit)), 10))   # quick peek at first 10 coefs
+
+
+> print(head(coef(summary(fit)), 10))   # quick peek at first 10 coefs
+                                 Estimate Std. Error    z value     Pr(>|z|)
+(Intercept)                    -9.7744078 0.16759955 -58.320011 0.000000e+00
+ethnicity_groupBlack Caribbean -0.2293631 0.05967049  -3.843828 1.211300e-04
+ethnicity_groupOther           -0.6414985 0.07174990  -8.940759 3.865077e-19
+ethnicity_groupWhite           -0.5757053 0.04836929 -11.902290 1.151431e-32
+imd_quintile2                  -0.5293679 0.06529622  -8.107175 5.181012e-16
+imd_quintile3-5                -0.8536061 0.12555012  -6.798926 1.054016e-11
+age_group25-29                  0.3098601 0.20735733   1.494329 1.350896e-01
+age_group30-34                  0.9365046 0.19168111   4.885743 1.030396e-06
+age_group35-39                  1.6330960 0.18201089   8.972518 2.898117e-19
+age_group40-44                  2.1323181 0.17713966  12.037497 2.257009e-33
+
+# Build age x sex weights
+w_tbl <- dat %>%
+  group_by(age_group, sex) %>%
+  summarise(w = sum(person_years), .groups = "drop") %>%
+  mutate(w = w / sum(w))
+
+cat("Sum of weights = ", sum(w_tbl$w), "\n")
+
+# levels used by the model
+lev <- fit$xlevels
+
+# Evaluation grid: all combinations
+at_grid <- list(
+  ethnicity_group = lev$ethnicity_group,
+  imd_quintile    = lev$imd_quintile,
+  age_group       = lev$age_group,
+  sex             = lev$sex
+)
+
+mm <- margins::margins(fit, at = at_grid, type = "response", vce = "delta")
+pred_df <- as.data.frame(mm) %>%
+  transmute(
+    ethnicity_group = factor(ethnicity_group, levels = lev$ethnicity_group),
+    imd_quintile    = factor(imd_quintile,    levels = lev$imd_quintile),
+    age_group       = factor(age_group,       levels = lev$age_group),
+    sex             = factor(sex,             levels = lev$sex),
+    rate            = fitted                  # predicted rate per PY
+  ) %>%
+  left_join(w_tbl, by = c("age_group","sex")) %>%
+  mutate(w = tidyr::replace_na(w, 0))
+
+cat("pred_df rows:", nrow(pred_df), "\n")
+print(head(pred_df))
+print(head(w_tbl))
+
+# Compute ASIR
+res_total_all <- pred_df %>%
+  group_by(ethnicity_group, imd_quintile) %>%
+  summarise(incidence_per_100k = sum(rate * w) * 1e5, .groups = "drop") %>%
+  arrange(ethnicity_group, imd_quintile) %>%
+  mutate(sex_group = "All")
+
+print(res_total_all)
+
+# Using margins
+library(margins)
+m_simple <- margins(fit, variables = "ethnicity_group", type = "response")
+summary(m_simple)
+
+> summary(m_simple)
+                         factor     AME     SE        z      p   lower   upper
+ ethnicity_groupBlack Caribbean -0.7914 0.2808  -2.8181 0.0048 -1.3419 -0.2410
+           ethnicity_groupOther -3.2535 0.2542 -12.7989 0.0000 -3.7517 -2.7553
+           ethnicity_groupWhite -2.8232 0.2235 -12.6330 0.0000 -3.2612 -2.3852
+
+install.packages("marginaleffects")
+library(marginaleffects)
+
+# 1) Fit model (as you already did)
+fit <- glm(
+  stroke_n ~ ethnicity_group * imd_quintile + age_group + sex,
+  offset = log(person_years),
+  family = poisson("log"),
+  data = dat  # dat is your filtered, factor-coerced frame
+)
+
+# 0) Age×sex weights (as you already have)
+w_tbl <- dat %>%
+  dplyr::group_by(age_group, sex) %>%
+  dplyr::summarise(w = sum(person_years), .groups = "drop") %>%
+  dplyr::mutate(w = w / sum(w))
+
+# 1) Levels from the fitted model
+lev <- fit$xlevels
+
+# 2) Evaluate margins on a grid with person_years = 1  (offset = 0)
+at_grid <- list(
+  ethnicity_group = lev$ethnicity_group,
+  imd_quintile    = lev$imd_quintile,
+  age_group       = lev$age_group,
+  sex             = lev$sex,
+  person_years    = 1               # <-- THIS is the key fix
+)
+
+mm <- margins::margins(
+  fit,
+  at = at_grid,
+  type = "response",
+  vce = "none",
+  unit_ses = FALSE
+)
+
+# 3) Collapse the replicated rows to ONE prediction per Eth×IMD×age×sex cell
+pred_cells <- as.data.frame(mm) %>%
+  dplyr::group_by(ethnicity_group, imd_quintile, age_group, sex) %>%
+  dplyr::summarise(rate = mean(fitted), .groups = "drop")
+
+# 4) Join weights and compute age–sex standardised incidence per 100k
+res_total_all <- pred_cells %>%
+  dplyr::left_join(w_tbl, by = c("age_group","sex")) %>%
+  dplyr::mutate(w = tidyr::replace_na(w, 0)) %>%
+  dplyr::group_by(ethnicity_group, imd_quintile) %>%
+  dplyr::summarise(incidence_per_100k = sum(rate * w) * 1e5, .groups = "drop") %>%
+  dplyr::arrange(ethnicity_group, imd_quintile) %>%
+  dplyr::mutate(sex_group = "All")
+
+print(res_total_all)
+
+library(writexl)
+
+m_df <- as.data.frame(m_simple)
+write_xlsx(m_df, "m_simple_results.xlsx")
