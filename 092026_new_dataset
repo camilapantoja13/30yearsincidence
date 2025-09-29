@@ -1,0 +1,643 @@
+# Loading the dataset and everything
+
+install.packages("readxl")
+library(readxl)
+dataset_20250422 <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/20250422 dataset.xlsx")
+library(dplyr)      # For %>%
+library(gt)         # For rendering the tables
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+install.packages("writexl")  
+library(writexl)
+
+# View first few rows
+head(dataset_20250422)
+
+# Then, set working directory for outputs
+setwd("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R")
+
+# Ward codes (Just for me to read)
+southwark95 <- c(
+  "Cathedral", "Chaucer", "Bricklayers", "Riverside", 
+  "Rotherhithe", Dockyard", "Browning", "Burgees", 
+  "Newington", "Faraday", 
+  "St Giles", Brunswick", 
+)
+southwark01 <- c(
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
+  "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
+  "Faraday", "Camberwell Green"
+)
+southwark11 <- c(
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe",
+  "Surrey Docks", "Newington", "East Walworth", "South Bermondsey",
+  "Faraday", "Camberwell Green"
+)
+southwark21 <- c(
+  "Borough & Bankside", "Camberwell Green", "Chaucer", "Faraday",
+  "London Bridge & West Bermondsey", "Newington (Southwark)", "North Bermondsey",
+  "North Walworth", "Old Kent Road", "Rotherhithe",
+  "South Bermondsey", "St George's (Southwark)", "Surrey Docks"
+)
+lambeth95 <- c("Bishop's", "Town Hall", "Streatham Hill", "Clapham Park", "Clapham Town", "Angell", "Herne Hill", "Ferndale",
+               "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall")
+lambeth01 <- c(
+  "Bishop`s", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
+  "Herne Hill", "Larkhall", "Oval", "Prince`s", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
+)
+lambeth11 <- c(
+  "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour", "Ferndale",
+  "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell", "Thornton", "Tulse Hill", "Vassall"
+)
+lambeth21 <- c(
+  "Waterloo & South Bank", "Vauxhall (Lambeth)", "Kennington (Lambeth)", "Oval",
+  "Stockwell West & Larkhall", "Stockwell East", "Myatt's Fields", "Clapham Town",
+  "Clapham East", "Clapham Common & Abbeville", "Brixton Acre Lane", "Brixton North",
+  "Brixton Rush Common", "Clapham Park", "Brixton Windrush",
+  "Herne Hill & Loughborough Junction", "St Martin's (Lambeth)"
+)
+
+# Valid LSOAs  (Just for me to read)
+valid_lsoas_southwark <- c(
+  # Cathedrals
+  "E01003927", "E01003929", "E01003934", "E01003935", "E01003928",
+  "E01003930", "E01003931", "E01003932", "E01003933",
+
+  # Chaucer
+  "E01003939", "E01003938", "E01003940", "E01003941", "E01003942",
+  "E01003936", "E01003937", "E01003943", "E01003944",
+
+  # Grange
+  "E01003976", "E01003982", "E01003975", "E01003978", "E01003979",
+  "E01003981", "E01003977", "E01003980",
+
+  # Riverside
+  "E01004025", "E01004026", "E01004027", "E01004022", "E01004023",
+  "E01004028", "E01004024",
+
+  # Rotherhithe
+  "E01004029", "E01004032", "E01004030", "E01004031", "E01004033",
+  "E01004034", "E01004036", "E01004035",
+
+  # Surrey Docks
+  "E01004053", "E01004054", "E01004055", "E01004056", "E01004057",
+  "E01004058", "E01004059", "E01004060",
+
+  # Newington
+  "E01003994", "E01003992", "E01003995", "E01003996", "E01003998",
+  "E01003999", "E01003991",
+
+  # East Walworth
+  "E01003959", "E01003960", "E01003961", "E01003962", "E01003965",
+  "E01003964", "E01003966", "E01003963",
+
+  # South Bermondsey
+  "E01004037", "E01004038", "E01004042", "E01004043", "E01004039",
+  "E01004040", "E01004041", "E01004044",
+
+  # Faraday
+  "E01003968", "E01003971", "E01003974", "E01003967", "E01003970",
+  "E01003972", "E01003973", "E01003969",
+
+  # Camberwell Green
+  "E01003923", "E01003918", "E01003925", "E01003919", "E01003920",
+  "E01003921", "E01003922", "E01003924", "E01003926"
+)
+
+valid_lsoas_lambeth <- c(
+  # Bishop's
+  "E01003012", "E01003013", "E01003014", "E01003016", "E01003017", "E01003015",
+
+  # Brixton Hill
+  "E01003019", "E01003020", "E01003018", "E01003021", "E01003022",
+  "E01003023", "E01003024", "E01003025",
+
+  # Clapham Common
+  "E01003029", "E01003032", "E01003026", "E01003027", "E01003028",
+  "E01003030", "E01003033", "E01003031",
+
+  # Clapham Town
+  "E01003034", "E01003035", "E01003036", "E01003037", "E01003038",
+  "E01003039", "E01003040", "E01003042", "E01003041",
+
+  # Coldharbour
+  "E01003046", "E01003048", "E01003045", "E01003047", "E01003049",
+  "E01003050", "E01003052", "E01003043", "E01003044", "E01003051",
+
+  # Ferndale
+  "E01003059", "E01003060", "E01003061", "E01003053", "E01003054",
+  "E01003056", "E01003058", "E01003055", "E01003057",
+
+  # Herne Hill
+  "E01003075", "E01003072", "E01003073", "E01003076", "E01003077",
+  "E01003078", "E01003071", "E01003074",
+
+  # Larkhall
+  "E01003089", "E01003091", "E01003092", "E01003088", "E01003093",
+  "E01003094", "E01003096", "E01003090", "E01003095",
+
+  # Oval
+  "E01003101", "E01003102", "E01003103", "E01003104", "E01003098",
+  "E01003099", "E01003100", "E01003097",
+
+  # Prince's
+  "E01003108", "E01003110", "E01003111", "E01003112", "E01003105",
+  "E01003106", "E01003107", "E01003109",
+
+  # Stockwell
+  "E01003122", "E01003129", "E01003121", "E01003123", "E01003124",
+  "E01003125", "E01003126", "E01003128", "E01003127",
+
+  # Thornton
+  "E01003159", "E01003160", "E01003162", "E01003156", "E01003157",
+  "E01003158", "E01003161", "E01003163",
+
+  # Tulse Hill
+  "E01003176", "E01003171", "E01003173", "E01003177", "E01003178",
+  "E01003172", "E01003174", "E01003175", "E01003179",
+
+  # Vassall
+  "E01003180", "E01003183", "E01003181", "E01003184", "E01003185",
+  "E01003186", "E01003187", "E01003182", "E01003188"
+)
+
+# Actual code to put in R for creating the filter
+valid_lsoas <- c(
+  "E01003927", "E01003929", "E01003934", "E01003935", "E01003928", "E01003930", "E01003931", "E01003932", "E01003933",
+  "E01003939", "E01003938", "E01003940", "E01003941", "E01003942", "E01003936", "E01003937", "E01003943", "E01003944",
+  "E01003976", "E01003982", "E01003975", "E01003978", "E01003979", "E01003981", "E01003977", "E01003980",
+  "E01004025", "E01004026", "E01004027", "E01004022", "E01004023", "E01004028", "E01004024",
+  "E01004029", "E01004032", "E01004030", "E01004031", "E01004033", "E01004034", "E01004036", "E01004035",
+  "E01004053", "E01004054", "E01004055", "E01004056", "E01004057", "E01004058", "E01004059", "E01004060",
+  "E01003994", "E01003992", "E01003995", "E01003996", "E01003998", "E01003999", "E01003991",
+  "E01003959", "E01003960", "E01003961", "E01003962", "E01003965", "E01003964", "E01003966", "E01003963",
+  "E01004037", "E01004038", "E01004042", "E01004043", "E01004039", "E01004040", "E01004041", "E01004044",
+  "E01003968", "E01003971", "E01003974", "E01003967", "E01003970", "E01003972", "E01003973", "E01003969",
+  "E01003923", "E01003918", "E01003925", "E01003919", "E01003920", "E01003921", "E01003922", "E01003924", "E01003926",
+  "E01003012", "E01003013", "E01003014", "E01003016", "E01003017", "E01003015",
+  "E01003019", "E01003020", "E01003018", "E01003021", "E01003022", "E01003023", "E01003024", "E01003025",
+  "E01003029", "E01003032", "E01003026", "E01003027", "E01003028", "E01003030", "E01003033", "E01003031",
+  "E01003034", "E01003035", "E01003036", "E01003037", "E01003038", "E01003039", "E01003040", "E01003042", "E01003041",
+  "E01003046", "E01003048", "E01003045", "E01003047", "E01003049", "E01003050", "E01003052", "E01003043", "E01003044", "E01003051",
+  "E01003059", "E01003060", "E01003061", "E01003053", "E01003054", "E01003056", "E01003058", "E01003055", "E01003057",
+  "E01003075", "E01003072", "E01003073", "E01003076", "E01003077", "E01003078", "E01003071", "E01003074",
+  "E01003089", "E01003091", "E01003092", "E01003088", "E01003093", "E01003094", "E01003096", "E01003090", "E01003095",
+  "E01003101", "E01003102", "E01003103", "E01003104", "E01003098", "E01003099", "E01003100", "E01003097",
+  "E01003108", "E01003110", "E01003111", "E01003112", "E01003105", "E01003106", "E01003107", "E01003109",
+  "E01003122", "E01003129", "E01003121", "E01003123", "E01003124", "E01003125", "E01003126", "E01003128", "E01003127",
+  "E01003159", "E01003160", "E01003162", "E01003156", "E01003157", "E01003158", "E01003161", "E01003163",
+  "E01003176", "E01003171", "E01003173", "E01003177", "E01003178", "E01003172", "E01003174", "E01003175", "E01003179",
+  "E01003180", "E01003183", "E01003181", "E01003184", "E01003185", "E01003186", "E01003187", "E01003182", "E01003188"
+)
+
+# Filter dataset excluding <18y and unplausible years like >200 and exclusing if date is within STOP STROKE period *and* not in a valid LSOA 
+slsr_clean <- dataset_20250422 %>%
+  filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
+  mutate(
+    dtstrk = as.Date(paste(strk_y, strk_m, strk_d, sep = "-"), format = "%Y-%m-%d"),
+    year = year(dtstrk)
+  ) %>%
+  filter(
+    !is.na(sex),
+    !is.na(age),
+    age >= 18 & age <= 200,  
+    !(dtstrk >= as.Date("2004-11-15") & dtstrk <= as.Date("2007-12-31") &
+      !(lsoa11 %in% valid_lsoas))
+  )
+
+# Make sure they are all ICD-10 strokes
+
+# Load the new dataset
+symdur_data <- read_csv("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/symdur.csv")
+
+
+# Make sure IDs are character to match
+symdur_data <- symdur_data %>% mutate(id = as.character(id))
+slsr_clean <- slsr_clean %>% mutate(id = as.character(id))
+
+# Step 1: Filter only ICD-10 strokes from 2022 onwards
+ids_icd10 <- symdur_data %>%
+  filter(symdur == 3) %>%
+  pull(id)
+
+# Step 2: Keep all cases before 2022, but apply filter from 2022 onwards
+slsr_clean_icd10 <- slsr_clean %>%
+  filter(
+    year < 2022 | (year >= 2022 & id %in% ids_icd10)
+  )
+# Identify stroke_type in ischaemic, PICH and SAH
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(
+    stroke_type = case_when(
+      # Primary: OCSP classification
+      subtype %in% 1:5 ~ "Ischaemic",
+      subtype == 6 ~ "PICH",
+      subtype == 7 ~ "SAH",
+
+      # Fallback 1: stroke subtype
+      is.na(subtype) & strksub == 1 ~ "Ischaemic",
+      is.na(subtype) & strksub == 2 ~ "PICH",
+      is.na(subtype) & strksub == 3 ~ "SAH",
+
+      # Fallback 2: infarct/haemorrhage
+      is.na(subtype) & is.na(strksub) & stroke == 1 ~ "Ischaemic",
+
+      # Still unknown
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Extract ethnicity from the cleaned dataset
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat == 4 ~ "Black Other",
+      eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(ethnicity))
+
+## ==== Fixing the "Others" problem ===
+# Install 
+install.packages("haven")
+library(haven)
+
+
+## Import Eva's Dataset
+SES_inequality_Dec_24 <- read_dta("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/SES inequality Dec 24.dta")
+
+
+library(dplyr)
+# Counting
+slsr_clean_icd10 %>%
+    filter(strk_y >= 1995, strk_y <= 1995, eth6cat == 5) %>%
+    summarise(n_other = n())
+
+ids_others_1995_old <- slsr_clean_icd10 %>%
+  filter(strk_y == 1995, eth6cat == 5) %>%
+  pull(id)
+ids_others_1995_new <- SES_inequality_Dec_24 %>%
+  filter(strk_y == 1995, eth6cat == 5) %>%
+  pull(id)
+
+# Find mismatches (those in old dataset but not in new "Others")
+mismatched_ids <- setdiff(ids_others_1995_old, ids_others_1995_new)
+
+# Check their new eth6cat values in SES_inequality_Dec_24
+SES_inequality_Dec_24 %>%
+  filter(id %in% mismatched_ids) %>%
+  count(eth6cat)
+
+library(dplyr)
+
+# Create a lookup table with id and the corrected eth6cat
+eth6cat_lookup <- SES_inequality_Dec_24 %>%
+  select(id, corrected_eth6cat = eth6cat)
+
+# Join the corrected values into slsr_clean and replace eth6cat
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(id = as.numeric(id))
+
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(eth6cat_lookup, by = "id") %>%
+  mutate(
+    eth6cat = if_else(!is.na(corrected_eth6cat), corrected_eth6cat, eth6cat)
+  ) %>%
+  select(-corrected_eth6cat)  # Remove the temporary column
+
+# Now lets check White people
+# Standarise Id format
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id))
+
+SES_inequality_Dec_24 <- SES_inequality_Dec_24 %>%
+  mutate(id = as.character(id))
+
+# Extract IDs labeled White in both
+ids_white_old <- slsr_clean_icd10 %>%
+  filter(strk_y == 1995, eth6cat == 1) %>%
+  pull(id)
+
+ids_white_new <- SES_inequality_Dec_24 %>%
+  filter(strk_y == 1995, eth6cat == 1) %>%
+  pull(id)
+
+# Compare them
+setdiff(ids_white_old, ids_white_new)
+setdiff(ids_white_new, ids_white_old)
+
+# I'm re-writing the eth6cat of my dataset with Eva's
+# Check IDs match
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id))
+SES_inequality_Dec_24 <- SES_inequality_Dec_24 %>%
+  mutate(id = as.character(id))
+
+# Join and overwrite
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(SES_inequality_Dec_24 %>% select(id, corrected_eth6cat = eth6cat), by = "id") %>%
+  mutate(
+    eth6cat = if_else(!is.na(corrected_eth6cat), corrected_eth6cat, eth6cat)
+  ) %>%
+  select(-corrected_eth6cat)
+
+# There are some patients that have no stroke classification on my dataset, so lets check if they have classification on Eva's
+slsr_clean_icd10 %>%
+  count(stroke_type) %>%
+  filter(!stroke_type %in% c("Ischaemic", "PICH", "SAH"))
+
+# Identify the 632 stroke cases from the dataset
+unknown_ids <- slsr_clean_icd10 %>%
+  filter(stroke_type == "Unknown") %>%
+  pull(id)
+
+# Filter Eva's dataset for matching IDs
+eva_classified <- SES_inequality_Dec_24 %>%
+  filter(id %in% unknown_ids) %>%
+  mutate(
+    resolved_stroke_type = case_when(
+      strksub == 1 ~ "Ischaemic",
+      strksub == 2 ~ "PICH",
+      strksub == 3 ~ "SAH",
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Count how many can be resolved
+eva_classified %>%
+  count(resolved_stroke_type)
+
+# Lets resolve these:
+# Keep only the resolved cases (not Unknown)
+resolved_updates <- eva_classified %>%
+  filter(resolved_stroke_type != "Unknown") %>%
+  select(id, resolved_stroke_type)
+
+# Update stroke_type in slsr_clean_icd10
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(resolved_updates, by = "id") %>%
+  mutate(
+    stroke_type = if_else(!is.na(resolved_stroke_type), resolved_stroke_type, stroke_type)
+  ) %>%
+  select(-resolved_stroke_type)  # clean up temporary column
+
+# Count how many unknown
+slsr_clean_icd10 %>%
+  count(stroke_type) %>%
+  filter(!stroke_type %in% c("Ischaemic", "PICH", "SAH"))
+
+# Lets try solving them
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(
+    stroke_type = case_when(
+      stroke_type != "Unknown" ~ stroke_type,  # keep existing classifications
+      subtype %in% 1:5 ~ "Ischaemic",          # OCSP ischaemic
+      subtype == 6     ~ "PICH",
+      subtype == 7     ~ "SAH",
+      strksub == 1     ~ "Ischaemic",          # strksub = 1: infarction
+      strksub == 2     ~ "PICH",               # primary intracerebral
+      strksub == 3     ~ "SAH",
+      TRUE             ~ "Unknown"             # unresolved stays as Unknown
+    )
+  )
+
+library(writexl)
+
+# Save as Excel
+write_xlsx(slsr_clean_icd10, "slsr_clean_icd10.xlsx")
+
+# ------------------------------------------------------------------
+# Fixing the missing patients
+# ------------------------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(readxl); library(dplyr); library(janitor); library(lubridate); library(stringr)
+  library(writexl)
+})
+
+## ---- STEP 1: read new file ----
+path_new <- "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/slsr_requested_2025-09-15.xlsx"
+new_raw  <- readxl::read_excel(path_new) |> janitor::clean_names()
+
+# Keep id as character everywhere
+new_raw <- new_raw |> mutate(id = as.character(id))
+slsr_clean_icd10 <- slsr_clean_icd10 |> mutate(id = as.character(id))
+
+
+## ---- the ID list you provided ----
+# Your list of IDs of interest
+ids_to_pull <- c(
+  "9650","9670","9798","9807","9911","9948","9986","9987","9998","9999","10000",
+  "10008","10009","10033","10034","10040","10041","10058","10059","10060",
+  "10062","10063","10082","10085","10092","10113","10130","10161","10211",
+  "10411","10413","10441","10485","10486","10516","10522","10526","10531",
+  "10548","10553","10561","10581","10604","10608","10612","10613","10630",
+  "10647","10655","10668","10693","10720","10721","10763","10766","10774",
+  "10782","10783","10799","10804","10810","10818","10845","10854","10867",
+  "10870","10876","10878","10885","10890","10917","10920","10931","10954",
+  "10959","10975"
+)
+
+## ---- STEP 2: check presence in new file and whether already in your clean dataset ----
+present_in_new   <- ids_to_pull[ids_to_pull %in% new_h$id]
+missing_in_new   <- setdiff(ids_to_pull, new_h$id)
+
+already_in_clean <- intersect(ids_to_pull, slsr_clean_icd10$id)
+to_append_ids    <- setdiff(present_in_new, already_in_clean)   # truly new for your dataset
+
+cat("IDs requested:           ", length(ids_to_pull), "\n")
+cat("Present in new extract:  ", length(present_in_new), "\n")
+cat("Missing in new extract:  ", length(missing_in_new), "\n")
+if (length(missing_in_new)) print(missing_in_new)
+cat("Already in slsr_clean:   ", length(already_in_clean), "\n")
+cat("To append (new rows):    ", length(to_append_ids), "\n")
+
+## ---- STEP 3: check which ones have strk_y missing ----
+# Focus on the 76 rows
+rows_76 <- new_raw %>%
+  filter(id %in% to_append_ids)
+
+# Quick counts of missingness
+rows_76 %>%
+  summarise(
+    n = n(),
+    miss_dtstrk = sum(is.na(dtstrk)),
+    miss_y = sum(is.na(strk_y)),
+    miss_m = sum(is.na(strk_m)),
+    miss_d = sum(is.na(strk_d))
+  )
+
+# Which IDs have missing year?
+ids_missing_year <- rows_76 %>% filter(is.na(strk_y)) %>% pull(id) %>% unique()
+length(ids_missing_year); ids_missing_year[1:20]  # peek first 20
+
+# Adding the missing strk_y
+library(dplyr); library(tibble); library(lubridate)
+
+manual_years <- tribble(
+  ~id,     ~strk_y_manual,
+  "9650",2022,"9670",2022,"9798",2022,"9807",2022,"9911",2023,"9948",2023,
+  "9986",2022,"9987",2023,"9998",2023,"9999",2017,"10000",2019,"10008",2023,
+  "10009",2017,"10033",2023,"10034",2023,"10040",2023,"10041",2023,"10058",2023,
+  "10059",2023,"10060",2023,
+  "10082",2023,"10085",2023,"10113",2023,"10130",2023,"10161",2023,"10211",2018,
+  "10413",2023,"10441",2023,"10485",2024,"10486",2024,"10516",2024,"10522",2024,
+  "10526",2024,"10531",2024,"10548",2024,"10553",2024,"10561",2024,"10581",2024,
+  "10604",2024,"10608",2024,"10612",2024,"10613",2024,"10630",2024,"10647",2024,
+  "10655",2024, "10693",2024,"10720",2024,"10721",2024,"10763",2024,"10766",2009,"10774",2024,
+  "10782",2024,"10783",2024,"10799",2024,"10804",2024,"10810",2024,"10818",2024,
+  "10845",2024,"10854",2024,"10867",2024,"10870",2025,"10876",2024,"10878",2024,
+  "10885",2024,"10890",2024,"10917",2024,"10920",2024,"10931",2024,"10954",2025,
+  "10959",2025,"10975",2025
+)
+
+# 1) isolate the 76
+rows_76 <- new_raw %>% mutate(id = as.character(id)) %>% filter(id %in% to_append_ids)
+
+# 2) join manual years
+rows_76 <- rows_76 %>% left_join(manual_years, by = "id")
+
+# 3) build three Date candidates (ensure all are Date class)
+rows_76 <- rows_76 %>%
+  mutate(
+    # text/ISO-like
+    dt_from_text  = suppressWarnings(as.Date(dtstrk))
+  )
+
+# excel serial (compute outside mutate to avoid class mixing)
+rows_76$dt_from_excel <- suppressWarnings(
+  if (is.numeric(rows_76$dtstrk)) {
+    as.Date(as.numeric(rows_76$dtstrk), origin = "1899-12-30")
+  } else {
+    as.Date(NA)
+  }
+)
+
+rows_76 <- rows_76 %>%
+  mutate(
+    # manual mid-year date, as *Date*
+    dt_manual = as.Date(if_else(!is.na(strk_y_manual),
+                                paste0(strk_y_manual, "-07-01"),
+                                NA_character_)),
+    # pick the first non-NA Date
+    dt_final  = coalesce(dt_from_text, dt_from_excel, dt_manual),
+    year_final = coalesce(year(dt_final), strk_y_manual)
+  )
+
+# how many of the 76 now have a usable date/year?
+rows_76 %>%
+  summarise(n = n(),
+            with_date = sum(!is.na(dt_final)),
+            without_date = sum(is.na(dt_final)),
+            with_year = sum(!is.na(year_final)),
+            without_year = sum(is.na(year_final)))
+
+# list IDs missing manual year (you didn’t provide some like 10062, 10063, 10411, 10668)
+ids_missing_manual <- rows_76 %>% filter(is.na(strk_y_manual)) %>% pull(id) %>% unique()
+ids_missing_manual
+
+# preview problem rows (if any)
+rows_76 %>%
+  filter(is.na(year_final)) %>%
+  select(id, dtstrk, strk_y, strk_m, strk_d, strk_y_manual) %>%
+  head()
+
+# Drop rows with no usable year
+rows_76_keep <- rows_76 %>%
+  filter(!is.na(year_final))
+
+dropped_ids <- rows_76 %>%
+  filter(is.na(year_final)) %>%
+  pull(id) %>%
+  unique()
+
+message("Dropping ", length(dropped_ids), " IDs with no year: ",
+        paste(dropped_ids, collapse = ", "))
+
+# == And now appending them ==
+
+# Built the rows to append:
+library(dplyr)
+
+# If you haven't already:
+# rows_76_keep <- rows_76 %>% filter(!is.na(year_final))
+# dropped_ids  <- rows_76 %>% filter(is.na(year_final)) %>% pull(id) %>% unique()
+
+rows_to_append <- rows_76_keep %>%
+  mutate(
+    id     = as.character(id),
+    dtstrk = dt_final,
+    year   = as.integer(year_final),
+
+    stroke_type = case_when(
+      !is.na(subtype) & subtype %in% 1:5 ~ "Ischaemic",
+      !is.na(subtype) & subtype == 6     ~ "PICH",
+      !is.na(subtype) & subtype == 7     ~ "SAH",
+      is.na(subtype) & !is.na(strksub) & strksub == 1 ~ "Ischaemic",
+      is.na(subtype) & !is.na(strksub) & strksub == 2 ~ "PICH",
+      is.na(subtype) & !is.na(strksub) & strksub == 3 ~ "SAH",
+      is.na(subtype) & is.na(strksub) & !is.na(stroke) & stroke == 1 ~ "Ischaemic",
+      TRUE ~ "Unknown"
+    ),
+
+    ethnicity = case_when(
+      !is.na(eth6cat) & eth6cat == 1 ~ "White",
+      !is.na(eth6cat) & eth6cat == 2 ~ "Black Caribbean",
+      !is.na(eth6cat) & eth6cat == 3 ~ "Black African",
+      !is.na(eth6cat) & eth6cat == 4 ~ "Black Other",
+      !is.na(eth6cat) & eth6cat == 5 ~ "Other",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Make columns align
+# Ensure both have the same columns (add missing cols as NA, then reorder)
+append_cols_missing <- setdiff(names(slsr_clean_icd10), names(rows_to_append))
+if (length(append_cols_missing)) {
+  rows_to_append[append_cols_missing] <- NA
+}
+rows_to_append <- rows_to_append[, names(slsr_clean_icd10)]
+
+# Bind, keep earliest stroke per id (first-ever), and ungroup
+slsr_updated <- bind_rows(
+  slsr_clean_icd10 %>% mutate(id = as.character(id)),
+  rows_to_append     %>% mutate(id = as.character(id))
+) %>%
+  arrange(id, dtstrk) %>%
+  group_by(id) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+message("Original rows: ", nrow(slsr_clean_icd10))
+message("Appended rows prepared: ", nrow(rows_to_append))
+message("Updated rows: ", nrow(slsr_updated))
+
+# Check all intended IDs (except dropped) are now present
+intended_ids <- setdiff(to_append_ids, dropped_ids)
+still_missing <- setdiff(intended_ids, slsr_updated$id)
+if (length(still_missing)) {
+  message("Still missing after append: ", paste(still_missing, collapse = ", "))
+} else {
+  message("All intended IDs successfully appended.")
+}
+
+# Optional: check distribution by year for new additions
+rows_to_append %>% count(year) %>% arrange(year)
+
+# Save the updated
+library(writexl)
+out_dir  <- "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R"
+out_file <- file.path(out_dir, paste0("slsr_clean_icd10_UPDATED_", Sys.Date(), ".xlsx"))
+write_xlsx(slsr_updated, out_file)
+message("Saved: ", out_file)
+
+# Also update the in-memory object used by your pipeline:
+slsr_clean_icd10 <- slsr_updated
+
+# Sanity check of missing variables
