@@ -641,3 +641,62 @@ message("Saved: ", out_file)
 slsr_clean_icd10 <- slsr_updated
 
 # Sanity check of missing variables
+rows_to_append %>%
+  summarise(
+    total = n(),
+    missing_age     = sum(is.na(age)),
+    missing_eth6cat = sum(is.na(eth6cat)),
+    missing_subtype = sum(is.na(subtype) & is.na(strksub)), # both blank
+    missing_imd     = sum(is.na(imd) & is.na(imd_quintile)) # depending on column names
+  )
+
+# append them 
+
+library(dplyr)
+library(lubridate)
+
+# Ensure ids are characters
+slsr_clean_icd10 <- slsr_clean_icd10 %>% mutate(id = as.character(id))
+manual_years     <- manual_years %>% mutate(id = as.character(id))
+
+# Patch years & dates
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  left_join(manual_years, by = "id") %>%
+  mutate(
+    # fill strk_y from manual year if missing; else from dtstrk
+    strk_y = coalesce(as.numeric(strk_y), as.numeric(strk_y_manual), year(dtstrk)),
+
+    # if date missing but we now have strk_y, set to mid-year (for period placement)
+    dtstrk = if_else(
+      is.na(dtstrk) & !is.na(strk_y),
+      as.Date(paste0(strk_y, "-07-01")),
+      dtstrk
+    ),
+
+    # keep a clean 'year' column in sync
+    year = coalesce(year, year(dtstrk), as.numeric(strk_y))
+  ) %>%
+  select(-strk_y_manual)  # drop helper
+
+# Quick QA on the 76 ids (or the 72 you kept)
+ids_we_touched <- c(
+  "9650","9670","9798","9807","9911","9948","9986","9987","9998","9999","10000",
+  "10008","10009","10033","10034","10040","10041","10058","10059","10060",
+  "10062","10063","10082","10085","10092","10113","10130","10161","10211",
+  "10411","10413","10441","10485","10486","10516","10522","10526","10531",
+  "10548","10553","10561","10581","10604","10608","10612","10613","10630",
+  "10647","10655","10668","10693","10720","10721","10763","10766","10774",
+  "10782","10783","10799","10804","10810","10818","10845","10854","10867",
+  "10870","10876","10878","10885","10890","10917","10920","10931","10954",
+  "10959","10975"
+)
+
+slsr_clean_icd10 %>%
+  filter(id %in% ids_we_touched) %>%
+  summarise(
+    n = n(),
+    missing_strk_y = sum(is.na(strk_y)),
+    missing_dtstrk = sum(is.na(dtstrk)),
+    min_year = suppressWarnings(min(strk_y, na.rm = TRUE)),
+    max_year = suppressWarnings(max(strk_y, na.rm = TRUE))
+  )
