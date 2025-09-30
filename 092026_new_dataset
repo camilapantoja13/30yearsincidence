@@ -700,3 +700,90 @@ slsr_clean_icd10 %>%
     min_year = suppressWarnings(min(strk_y, na.rm = TRUE)),
     max_year = suppressWarnings(max(strk_y, na.rm = TRUE))
   )
+
+
+# == Adding the ages ===
+## ---- the ID list you provided ----
+# Your list of IDs of interest
+ids_to_pull <- c(
+  "9650","9670","9798","9807","9911","9948","9986","9987","9998","9999","10000",
+  "10008","10009","10033","10034","10040","10041","10058","10059","10060",
+  "10062","10063","10082","10085","10092","10113","10130","10161","10211",
+  "10411","10413","10441","10485","10486","10516","10522","10526","10531",
+  "10548","10553","10561","10581","10604","10608","10612","10613","10630",
+  "10647","10655","10668","10693","10720","10721","10763","10766","10774",
+  "10782","10783","10799","10804","10810","10818","10845","10854","10867",
+  "10870","10876","10878","10885","10890","10917","10920","10931","10954",
+  "10959","10975"
+)
+
+suppressPackageStartupMessages({
+  library(readxl); library(dplyr); library(janitor); library(rlang)
+})
+
+# 1) Limit to the IDs you care about (and that actually exist in the clean file)
+recent_ids <- intersect(ids_to_pull, slsr_clean_icd10$id)
+
+# 2) Which of those are missing age in slsr_clean_icd10?
+missing_age_ids <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id)) %>%
+  filter(id %in% recent_ids, is.na(age)) %>%
+  pull(id) %>% unique()
+
+cat("Recently added IDs in clean file:", length(recent_ids), "\n")
+cat("Missing age among them:", length(missing_age_ids), "\n")
+
+library(readxl)
+library(dplyr)
+library(janitor)
+library(readr)
+
+# Read file, treat all as text first to avoid 0/1 problem
+age_raw <- read_excel("/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Age and survival - deceased  before consent.xlsx",
+                      col_types = "text") %>%
+  clean_names() %>%
+  mutate(
+    id = as.character(id),
+    age_at_stroke_onset = parse_number(age_at_stroke_onset)  # safely turn to numeric
+  )
+
+# Keep only rows with a valid age in the new file
+age_lookup <- age_raw %>%
+  filter(!is.na(age_at_stroke_onset)) %>%
+  select(id, age_new = age_at_stroke_onset)
+
+age_lookup <- age_raw %>%
+  mutate(
+    id = as.character(id),
+    age_clean = suppressWarnings(as.numeric(age_at_stroke_onset)),
+    age_clean = na_if(age_clean, 0),                  # treat 0 as missing
+    age_clean = if_else(age_clean < 18 | age_clean > 120, NA_real_, age_clean)
+  ) %>%
+  filter(!is.na(age_clean)) %>%
+  select(id, age_new = age_clean)
+
+# 2) See how many of the recently added **and missing-age** IDs we can fill
+age_hits <- age_lookup %>%
+  filter(id %in% missing_age_ids)
+
+cat("Usable ages found for missing-age IDs: ", nrow(age_hits), "\n")
+
+# (Optional) peek at a few
+# print(age_hits %>% arrange(id) %>% head(20))
+
+# 3) Patch into your clean dataset (non-destructive: only fills where age is NA)
+slsr_patched <- slsr_clean_icd10 %>%
+  mutate(id = as.character(id)) %>%
+  left_join(age_hits, by = "id") %>%
+  mutate(age = coalesce(age, age_new)) %>%
+  select(-age_new)
+
+# 4) Quick audit
+before_missing <- sum(is.na(slsr_clean_icd10$age) & slsr_clean_icd10$id %in% missing_age_ids)
+after_missing  <- sum(is.na(slsr_patched$age)     & slsr_patched$id %in% missing_age_ids)
+
+cat("Missing ages before patch (recent IDs): ", before_missing, "\n")
+cat("Missing ages after  patch (recent IDs): ", after_missing,  "\n")
+
+# Keep the patched version if happy
+slsr_clean_icd10 <- slsr_patched
