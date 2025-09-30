@@ -787,3 +787,3068 @@ cat("Missing ages after  patch (recent IDs): ", after_missing,  "\n")
 
 # Keep the patched version if happy
 slsr_clean_icd10 <- slsr_patched
+
+library(writexl)
+
+# Define output path
+out_path <- "/Users/mariacamilapantojaruiz/Library/Mobile Documents/com~apple~CloudDocs/Documents/R/slsr_clean_icd10_FINAL.xlsx"
+
+# Save the dataset
+write_xlsx(slsr_clean_icd10, out_path)
+
+message("Saved updated dataset to: ", out_path)
+
+# ------------------------------------------------------------------
+# Table 1
+# ------------------------------------------------------------------
+
+# Rebuild the ethnicity in slsr_clean_icd10
+slsr_clean_icd10 <- slsr_clean_icd10 %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    eth6cat == 99 ~ "Unknown",
+    TRUE ~ NA_character_
+  ))
+
+# Add the population
+pop_full_interpolated_with_imd <- read.csv("~/Library/Mobile Documents/com~apple~CloudDocs/Documents/PhD/Incidence 30 years/Census check/IMD checked_v2/pop_full_interpolated_with_imd.csv")
+View(pop_full_interpolated_with_imd)
+
+# New pop_summary
+# Step 1: Summarise person-years
+new_pop_summary <- pop_full_interpolated_with_imd %>%
+  filter(year >= 1995 & year <= 2024) %>%
+  mutate(ethnicity_group = case_when(
+    ethnicity_grouped == "White" ~ "White",
+    ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+    ethnicity_grouped == "Black African" ~ "Black African",
+    ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  group_by(ethnicity_group) %>%
+  summarise(person_years = round(sum(pop_count_interp, na.rm = TRUE), 1), .groups = "drop")
+
+# Step 2: Add overall total
+overall_py_new <- new_pop_summary %>%
+  summarise(person_years = sum(person_years)) %>%
+  mutate(ethnicity_group = "All")
+
+# Combine
+new_pop_summary <- bind_rows(overall_py_new, new_pop_summary)
+
+# Total strokes per ethnicity
+total_strokes <- slsr_clean_icd10 %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  count(ethnicity_group, name = "stroke_total")
+
+# Add overall
+overall_strokes <- total_strokes %>%
+  summarise(stroke_total = sum(stroke_total)) %>%
+  mutate(ethnicity_group = "All")
+
+total_strokes <- bind_rows(overall_strokes, total_strokes)
+
+# Stroke subtype distribution
+subtype_distribution <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  count(ethnicity_group, stroke_type) %>%
+  group_by(ethnicity_group) %>%
+  mutate(
+    percent = round(100 * n / sum(n), 1),
+    label = paste0(percent, "%")
+  ) %>%
+  ungroup()
+
+# Add overall
+overall_subtype <- slsr_clean_icd10 %>%
+  filter(stroke_type %in% c("Ischaemic", "PICH", "SAH")) %>%
+  count(stroke_type) %>%
+  mutate(
+    ethnicity_group = "All",
+    percent = round(100 * n / sum(n), 1),
+    label = paste0(percent, "%")
+  )
+
+subtype_distribution <- bind_rows(subtype_distribution, overall_subtype)
+
+# Recalculate incidence rates with new population
+incidence_rates_new <- subtype_distribution %>%
+  select(ethnicity_group, stroke_type, n) %>%
+  left_join(new_pop_summary, by = "ethnicity_group") %>%
+  mutate(rate_per_100k = round(n / person_years * 100000, 1)) %>%
+  select(ethnicity_group, stroke_type, rate_per_100k)
+
+# Mean age at first stroke
+age_summary <- slsr_clean_icd10 %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  group_by(ethnicity_group) %>%
+  summarise(
+    mean_age = round(mean(age, na.rm = TRUE), 1),
+    sd_age = round(sd(age, na.rm = TRUE), 1),
+    age_label = paste0(mean_age, " (", sd_age, ")"),
+    .groups = "drop"
+  )
+
+# Add overall
+age_all <- slsr_clean_icd10 %>%
+  summarise(
+    mean_age = round(mean(age, na.rm = TRUE), 1),
+    sd_age = round(sd(age, na.rm = TRUE), 1)
+  ) %>%
+  mutate(
+    ethnicity_group = "All",
+    age_label = paste0(mean_age, " (", sd_age, ")")
+  )
+
+age_summary <- bind_rows(age_all, age_summary) %>%
+  select(ethnicity_group, age_label)
+
+
+## Summarise in a table
+library(dplyr)
+library(tidyr)
+
+# Person-years
+person_years_wide <- new_pop_summary %>%
+  pivot_wider(names_from = ethnicity_group, values_from = person_years) %>%
+  mutate(Measure = "Source population (person-years)")
+
+# Total strokes by ethnicity group
+total_strokes <- slsr_clean_icd10 %>%
+  mutate(ethnicity_group = case_when(
+    eth6cat == 1 ~ "White",
+    eth6cat == 2 ~ "Black Caribbean",
+    eth6cat == 3 ~ "Black African",
+    eth6cat %in% c(4, 5) ~ "Other",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(ethnicity_group)) %>%
+  count(ethnicity_group, name = "stroke_total")
+
+# Add overall total
+overall_strokes <- total_strokes %>%
+  summarise(stroke_total = sum(stroke_total)) %>%
+  mutate(ethnicity_group = "All")
+
+# Combine
+total_strokes <- bind_rows(overall_strokes, total_strokes)
+
+# Pivot to wide format for the summary table
+total_strokes_wide <- total_strokes %>%
+  pivot_wider(names_from = ethnicity_group, values_from = stroke_total) %>%
+  mutate(Measure = "All strokes") %>%
+  select(Measure, All, White, `Black African`, `Black Caribbean`, Other)
+
+# Age at first stroke
+age_summary_wide <- age_summary %>%
+  pivot_wider(names_from = ethnicity_group, values_from = age_label) %>%
+  mutate(Measure = "Age at first stroke (mean ± SD)")
+
+# Stroke subtype n (%)
+subtype_formatted <- subtype_distribution %>%
+  mutate(label_n = paste0(n, " (", label, ")")) %>%
+  select(ethnicity_group, stroke_type, label_n) %>%
+  pivot_wider(names_from = ethnicity_group, values_from = label_n) %>%
+  mutate(Measure = paste0("Subtype – ", stroke_type)) %>%
+  select(-stroke_type)
+
+# Crude incidence
+incidence_formatted <- incidence_rates_new %>%
+  pivot_wider(names_from = ethnicity_group, values_from = rate_per_100k) %>%
+  mutate(Measure = paste0("Incidence – ", stroke_type)) %>%
+  select(-stroke_type)
+
+# Combine and order
+# Helper: Convert all columns except Measure to character
+coerce_to_char <- function(df) {
+  df %>%
+    mutate(across(-Measure, as.character))
+}
+
+# Apply fix and combine
+crude_summary_table <- bind_rows(
+  coerce_to_char(person_years_wide),
+  coerce_to_char(total_strokes_wide),
+  coerce_to_char(age_summary_wide),
+  coerce_to_char(subtype_formatted),
+  coerce_to_char(incidence_formatted)
+) %>%
+  select(Measure, All, White, `Black African`, `Black Caribbean`, Other)
+
+write_xlsx(crude_summary_table, "crude_summary_table.xlsx")
+
+# ------------------------------------------------------------------
+# Table 2
+# ------------------------------------------------------------------
+library(dplyr)
+library(tidyr)
+library(readr)
+library(tibble)
+library(purrr)
+library(writexl)
+library(officer)
+library(flextable)
+
+# Prepare the population ages
+assign_age_group <- function(age) {
+  case_when(
+    age >= 18 & age < 25 ~ "18-24",
+    age >= 25 & age < 30 ~ "25-29",
+    age >= 30 & age < 35 ~ "30-34",
+    age >= 35 & age < 40 ~ "35-39",
+    age >= 40 & age < 45 ~ "40-44",
+    age >= 45 & age < 50 ~ "45-49",
+    age >= 50 & age < 55 ~ "50-54",
+    age >= 55 & age < 60 ~ "55-59",
+    age >= 60 & age < 65 ~ "60-64",
+    age >= 65 & age < 70 ~ "65-69",
+    age >= 70 & age < 75 ~ "70-74",
+    age >= 75 ~ "75+",
+    TRUE ~ NA_character_
+  )
+}
+
+slsr_clean_icd10_prepped <- slsr_clean_icd10 %>%
+  mutate(
+    ethnicity_group = case_when(
+      eth6cat == 1 ~ "White",
+      eth6cat == 2 ~ "Black Caribbean",
+      eth6cat == 3 ~ "Black African",
+      eth6cat %in% c(4, 5) ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024",
+      TRUE ~ NA_character_
+    ),
+    age_group = assign_age_group(age)
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(stroke_type), !is.na(sex))
+
+  # Define ESP
+esp2013_collapsed <- tibble::tribble(
+  ~age_group, ~sex,     ~esp_count,
+  "18-24",    "Male",   8200,
+  "25-29",    "Male",   6000,
+  "30-34",    "Male",   6500,
+  "35-39",    "Male",   7000,
+  "40-44",    "Male",   7000,
+  "45-49",    "Male",   7000,
+  "50-54",    "Male",   7000,
+  "55-59",    "Male",   6500,
+  "60-64",    "Male",   6000,
+  "65-69",    "Male",   5500,
+  "70-74",    "Male",   5000,
+  "75+",      "Male",   9000,
+  "18-24",    "Female", 8200,
+  "25-29",    "Female", 6000,
+  "30-34",    "Female", 6500,
+  "35-39",    "Female", 7000,
+  "40-44",    "Female", 7000,
+  "45-49",    "Female", 7000,
+  "50-54",    "Female", 7000,
+  "55-59",    "Female", 6500,
+  "60-64",    "Female", 6000,
+  "65-69",    "Female", 5500,
+  "70-74",    "Female", 5000,
+  "75+",      "Female", 9000
+)
+
+# Count strokes by period × age_group × sex × ethnicity_group
+stroke_counts_total <- slsr_clean_icd10_prepped %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+write_xlsx(stroke_counts_total, "stroke_counts_total.xlsx")
+
+stroke_counts_total <- slsr_clean_icd10_prepped %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)  # keeps character if already valid
+    )
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# Prepare population person-years -> collapse 18-24 into 1 group and also >75 in 75+
+pop_person_years <- pop_full_interpolated_with_imd %>%
+  mutate(
+    age_group = case_when(
+      age_group %in% c("18-19", "20-24") ~ "18-24",
+      age_group == "25-29" ~ "25-29",
+      age_group == "30-34" ~ "30-34",
+      age_group == "35-39" ~ "35-39",
+      age_group == "40-44" ~ "40-44",
+      age_group == "45-49" ~ "45-49",
+      age_group == "50-54" ~ "50-54",
+      age_group == "55-59" ~ "55-59",
+      age_group == "60-64" ~ "60-64",
+      age_group == "65-69" ~ "65-69",
+      age_group == "70-74" ~ "70-74",
+      age_group %in% c("75-79", "80-84", "85+") ~ "75+",
+      TRUE ~ NA_character_
+    ),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex), !is.na(period)) %>%
+  group_by(period, age_group, sex, ethnicity_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+# Join
+  crude_rates <- left_join(stroke_counts_total, pop_person_years,
+                         by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),  # fill in 0 for cells with no strokes
+    rate_per_100k = (stroke_n / person_years) * 100000
+  )
+
+# ASIR
+standardised_rates <- crude_rates %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  mutate(
+    weighted_cases = rate_per_100k * esp_count  # expected strokes per ESP population
+  ) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_cases, na.rm = TRUE) / 200000,  # divide by total ESP
+    .groups = "drop"
+  ) %>%
+  mutate(asir = round(asir, 1))  # optional rounding
+
+# Using gamma distribution method por CIs
+standardised_rates_ci <- crude_rates %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    weight = esp_count / 200000,
+    weighted_rate = rate_per_100k * esp_count,
+    weighted_var = (stroke_n * (esp_count^2)) / (person_years^2)
+  ) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate, na.rm = TRUE) / 200000,
+    var_asir = sum(weighted_var, na.rm = TRUE) / (200000^2),
+    se_asir = sqrt(var_asir),
+    lower_ci = asir - 1.96 * se_asir,
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1)
+  )
+
+#  -> these are too narrow
+
+# Get the CIs using a Poisson-based methods
+You calculated age- and sex-standardised stroke incidence rates (ASIRs) per ethnic group and 5-year period, using direct standardisation and the European Standard Population 2013 (ESP2013) as the reference population.
+
+Then, to get 95% confidence intervals, you used a Poisson-based method that accounts for uncertainty in the observed stroke counts across age–sex strata.
+
+  esp_adjusted <- crude_rates %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    weighted_rate = rate_per_100k * esp_count,
+    wi_squared_di = (esp_count^2) * stroke_n
+  ) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate, na.rm = TRUE) / 200000,
+    se_asir = sqrt(sum(wi_squared_di, na.rm = TRUE)) / 200000,
+    lower_ci = asir - 1.96 * se_asir,
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    asir = round(asir, 1),
+    lower_ci = round(pmax(0, lower_ci), 1),
+    upper_ci = round(upper_ci, 1)
+  )
+
+
+# Still narrow
+esp_adjusted_conservative <- crude_rates %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    crude_rate = stroke_n / person_years,  # actual rate, not per 100k
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,  # now multiply by 100k here
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1)
+  )
+
+# Missing calculation for the entire population
+# First, collapse all ethnicities for total population ASIR
+# First, create complete stroke+population table (including zeros)
+crude_rates_all_strata <- pop_person_years %>%
+  left_join(stroke_counts_total, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0)
+  )
+
+# Collapse all ethnicities
+crude_rates_total <- crude_rates_all_strata %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n),
+    person_years = sum(person_years),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    crude_rate = stroke_n / person_years  # not per 100k
+  )
+
+# Join with ESP and calculate ASIR + correct 95% CI
+standardised_rates_total <- crude_rates_total %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1)
+  )
+  
+# Formating a nice table
+# Bring them together
+all_asir_table <- bind_rows(esp_adjusted_conservative, standardised_rates_total)
+
+# And clean it
+all_asir_table <- all_asir_table %>%
+  filter(!is.na(period))
+
+# Now create the labels
+formatted_asir_table <- all_asir_table %>%
+  mutate(
+    `ASIR (95% CI)` = paste0(round(asir, 1), " (", round(lower_ci, 1), "–", round(upper_ci, 1), ")")
+  )
+
+  # And pivot wide
+  asir_table_wide <- formatted_asir_table %>%
+  select(ethnicity_group, period, `ASIR (95% CI)`) %>%
+  tidyr::pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(match(ethnicity_group, c("Total", "White", "Black African", "Black Caribbean", "Other"))) %>%
+  rename(Ethnicity = ethnicity_group)
+
+write_xlsx(asir_table_wide, "asir_table_wide.xlsx")
+
+
+# ======= Plot them =======
+# Custom colours (from your screenshot selection)
+ethnicity_colours <- c(
+  "White" = "#E64173",          # bright pink
+  "Black African" = "#984EA3",  # deep purple
+  "Black Caribbean" = "#FF7F00",# orange
+  "Other" = "#377EB8"           # blue
+)
+
+ethnicity_shapes <- c(
+  "White" = 16,           # circle
+  "Black African" = 17,   # triangle
+  "Black Caribbean" = 15, # square
+  "Other" = 18            # diamond
+)
+
+# Plot function
+library(ggplot2)
+library(dplyr)
+
+ethnic_groups_to_plot <- c("White", "Black African", "Black Caribbean", "Other")
+
+plot_stroke_asir <- function(df, stroke_subtype) {
+  df %>%
+    filter(
+      stroke_type == stroke_subtype,
+      ethnicity_group %in% ethnic_groups_to_plot  # this excludes "Total"
+    ) %>%
+    ggplot(aes(
+      x = period, y = asir,
+      colour = ethnicity_group,
+      shape = ethnicity_group,
+      group = ethnicity_group
+    )) +
+    geom_point(size = 3) +
+    geom_line(linewidth = 1) +
+    geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.1) +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(
+      title = paste("Age- and Sex-Standardised Incidence Rates:", stroke_subtype),
+      y = "ASIR per 100,000",
+      x = "Period",
+      colour = "Ethnicity",
+      shape = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+plot_total     <- plot_stroke_asir(all_stroke_asir, "Total")
+plot_ischaemic <- plot_stroke_asir(all_stroke_asir, "Ischaemic")
+plot_pich      <- plot_stroke_asir(all_stroke_asir, "PICH")
+plot_sah       <- plot_stroke_asir(all_stroke_asir, "SAH")
+
+# Show one plot
+plot_total
+plot_ischaemic
+plot_pich
+plot_sah
+
+
+# === Now lets do sex stratified ======
+stroke_counts_sex <- slsr_clean_icd10_prepped %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# Crude
+crude_rates_sex <- pop_person_years %>%
+  left_join(stroke_counts_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = (stroke_n / person_years) * 100000
+  )
+
+# ESP
+esp_adjusted_sex <- crude_rates_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "Total",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# === Sex subtypes =====
+
+# Ischaemic
+slsr_isch_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "Ischaemic") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_isch_sex <- slsr_isch_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+crude_rates_isch_sex <- pop_person_years %>%
+  left_join(stroke_counts_isch_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = stroke_n / person_years * 100000
+  )
+
+esp_adjusted_isch_sex <- crude_rates_isch_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "Ischaemic",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# PICH
+slsr_pich_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "PICH") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_pich_sex <- slsr_pich_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+crude_rates_pich_sex <- pop_person_years %>%
+  left_join(stroke_counts_pich_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = stroke_n / person_years * 100000
+  )
+esp_adjusted_pich_sex <- crude_rates_pich_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    crude_rate = stroke_n / person_years,
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "PICH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# SAH
+slsr_sah_sex <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "SAH") %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  )
+stroke_counts_sah_sex <- slsr_sah_sex %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+crude_rates_sah_sex <- pop_person_years %>%
+  left_join(stroke_counts_sah_sex, by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n = replace_na(stroke_n, 0),
+    rate_per_100k = stroke_n / person_years * 100000
+  )
+
+esp_adjusted_sah_sex <- crude_rates_sah_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    crude_rate   = stroke_n / person_years,                  # rate (per person-year)
+    weighted_rate = crude_rate * esp_count,                  # age-sex weighted contribution
+    weighted_var  = (esp_count^2) * (stroke_n / person_years^2)  # Poisson var term
+  ) %>%
+  group_by(period, sex, ethnicity_group) %>%
+  summarise(
+    asir    = sum(weighted_rate) / 200000 * 100000,          # ASIR per 100k
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,     # standard error
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    stroke_type = "SAH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+# == and create the tables ==
+esp_adjusted_isch_sex <- esp_adjusted_isch_sex %>% mutate(stroke_type = "Ischaemic")
+esp_adjusted_pich_sex <- esp_adjusted_pich_sex %>% mutate(stroke_type = "PICH")
+esp_adjusted_sah_sex  <- esp_adjusted_sah_sex  %>% mutate(stroke_type = "SAH")
+esp_adjusted_sex <- esp_adjusted_sex %>% mutate(stroke_type = "Total")
+
+
+# Combine
+sex_stratified_asir <- bind_rows(
+  esp_adjusted_sex,
+  esp_adjusted_isch_sex,
+  esp_adjusted_pich_sex,
+  esp_adjusted_sah_sex
+)
+
+# Add ASIR (95% CI) column
+sex_stratified_asir <- sex_stratified_asir %>%
+  filter(!is.na(period)) %>%
+  mutate(
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+asir_table_female <- sex_stratified_asir %>%
+  filter(sex == "Female") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+asir_table_male <- sex_stratified_asir %>%
+  filter(sex == "Male") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+writexl::write_xlsx(list(
+  Female_ASIRs = asir_table_female,
+  Male_ASIRs = asir_table_male
+), "sex_stratified_asir_by_subtype_incl_total.xlsx")
+
+
+# === Collapse across ethnicities for total Male and Female ASIRs ===
+crude_rates_total_sex <- crude_rates_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+# === Join ESP and calculate ASIR + CI for total males/females ===
+standardised_rates_total_sex <- crude_rates_total_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "Total",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_isch_sex <- crude_rates_isch_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_isch_sex <- crude_rates_total_isch_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "Ischaemic",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_pich_sex <- crude_rates_pich_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_pich_sex <- crude_rates_total_pich_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "PICH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+crude_rates_total_sah_sex <- crude_rates_sah_sex %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(crude_rate = stroke_n / person_years)
+
+standardised_rates_total_sah_sex <- crude_rates_total_sah_sex %>%
+  left_join(esp2013_collapsed, by = c("age_group", "sex")) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    weighted_rate = crude_rate * esp_count,
+    weighted_var = (esp_count^2) * (stroke_n / person_years^2)
+  ) %>%
+  group_by(period, sex) %>%
+  summarise(
+    asir = sum(weighted_rate) / 200000 * 100000,
+    se_asir = sqrt(sum(weighted_var)) / 200000 * 100000,
+    lower_ci = pmax(0, asir - 1.96 * se_asir),
+    upper_ci = asir + 1.96 * se_asir,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total",
+    stroke_type = "SAH",
+    asir = round(asir, 1),
+    lower_ci = round(lower_ci, 1),
+    upper_ci = round(upper_ci, 1),
+    `ASIR (95% CI)` = paste0(asir, " (", lower_ci, "–", upper_ci, ")")
+  )
+
+sex_stratified_asir <- bind_rows(
+  sex_stratified_asir,
+  standardised_rates_total_isch_sex,
+  standardised_rates_total_pich_sex,
+  standardised_rates_total_sah_sex
+)
+
+# ===== Add stroke_type and Total labels =====
+esp_adjusted_sex        <- esp_adjusted_sex        %>% mutate(stroke_type = "Total")
+esp_adjusted_isch_sex   <- esp_adjusted_isch_sex   %>% mutate(stroke_type = "Ischaemic")
+esp_adjusted_pich_sex   <- esp_adjusted_pich_sex   %>% mutate(stroke_type = "PICH")
+esp_adjusted_sah_sex    <- esp_adjusted_sah_sex    %>% mutate(stroke_type = "SAH")
+
+standardised_rates_total_sex        <- standardised_rates_total_sex        %>% mutate(ethnicity_group = "Total", stroke_type = "Total")
+standardised_rates_total_isch_sex   <- standardised_rates_total_isch_sex   %>% mutate(ethnicity_group = "Total", stroke_type = "Ischaemic")
+standardised_rates_total_pich_sex   <- standardised_rates_total_pich_sex   %>% mutate(ethnicity_group = "Total", stroke_type = "PICH")
+standardised_rates_total_sah_sex    <- standardised_rates_total_sah_sex    %>% mutate(ethnicity_group = "Total", stroke_type = "SAH")
+
+# ===== Combine =====
+all_sex_stratified_asir <- bind_rows(
+  esp_adjusted_sex, esp_adjusted_isch_sex, esp_adjusted_pich_sex, esp_adjusted_sah_sex,
+  standardised_rates_total_sex,
+  standardised_rates_total_isch_sex,
+  standardised_rates_total_pich_sex,
+  standardised_rates_total_sah_sex
+)
+
+# ===== Clean and format =====
+all_sex_stratified_asir <- all_sex_stratified_asir %>%
+  filter(!is.na(period)) %>%
+  mutate(
+    `ASIR (95% CI)` = paste0(round(asir, 1), " (", round(lower_ci, 1), "–", round(upper_ci, 1), ")")
+  )
+
+# ===== Separate female and male tables =====
+asir_table_female <- all_sex_stratified_asir %>%
+  filter(sex == "Female") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("Total", "White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+asir_table_male <- all_sex_stratified_asir %>%
+  filter(sex == "Male") %>%
+  select(ethnicity_group, stroke_type, period, `ASIR (95% CI)`) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = `ASIR (95% CI)`
+  ) %>%
+  arrange(
+    match(ethnicity_group, c("Total", "White", "Black African", "Black Caribbean", "Other")),
+    match(stroke_type, c("Total", "Ischaemic", "PICH", "SAH"))
+  ) %>%
+  rename(
+    Ethnicity = ethnicity_group,
+    Stroke_Type = stroke_type
+  )
+
+# ===== Write to Excel =====
+writexl::write_xlsx(list(
+  Female_ASIRs = asir_table_female,
+  Male_ASIRs = asir_table_male
+), "sex_stratified_asir_by_subtype_with_totals.xlsx")
+
+# ==== Plot them ===== 
+# Ethnicity colours and shapes (same as before)
+ethnicity_colours <- c(
+  "White" = "#E64173",
+  "Black African" = "#984EA3",
+  "Black Caribbean" = "#FF7F00",
+  "Other" = "#377EB8"
+)
+
+ethnicity_shapes <- c(
+  "White" = 16,
+  "Black African" = 17,
+  "Black Caribbean" = 15,
+  "Other" = 18
+)
+
+# Function: Plot by stroke type and facet by sex
+plot_sex_subtype_asir <- function(df, stroke_subtype, sex_input) {
+  df %>%
+    filter(
+      stroke_type == stroke_subtype,
+      sex == sex_input,
+      ethnicity_group %in% names(ethnicity_colours)
+    ) %>%
+    ggplot(aes(
+      x = period, y = asir,
+      colour = ethnicity_group,
+      shape = ethnicity_group,
+      group = ethnicity_group
+    )) +
+    geom_point(size = 2.8) +
+    geom_line(linewidth = 1) +
+    geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.1) +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(
+      title = paste0("ASIRs: ", stroke_subtype, " (", sex_input, ")"),
+      y = "ASIR per 100,000",
+      x = "Period",
+      colour = "Ethnicity",
+      shape = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+# Total
+plot_total_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "Total", "Female")
+plot_total_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "Total", "Male")
+
+# Ischaemic
+plot_isch_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "Ischaemic", "Female")
+plot_isch_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "Ischaemic", "Male")
+
+# PICH
+plot_pich_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "PICH", "Female")
+plot_pich_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "PICH", "Male")
+
+# SAH
+plot_sah_female <- plot_sex_subtype_asir(all_sex_stratified_asir, "SAH", "Female")
+plot_sah_male   <- plot_sex_subtype_asir(all_sex_stratified_asir, "SAH", "Male")
+
+
+plot_total_female
+plot_total_male
+plot_isch_female
+plot_isch_male
+plot_pich_female
+plot_pich_male 
+plot_sah_female
+plot_sah_male
+
+# ------------------------------------------------
+# Temporal trends
+# ------------------------------------------------
+# recreate crude_stroke_totals -> Start from your existing crude_rates_all_strata (already has counts & PYs per ethnicity)
+
+#  Create "All" ethnicity group for total population
+crude_rates_all_ethnicity <- crude_rates_all_strata %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "All")
+
+# Bind ethnicity-specific + total population rows
+crude_rates_all_combined <- bind_rows(
+  crude_rates_all_strata,
+  crude_rates_all_ethnicity
+)
+
+# ==== TOTAL STROKES ======
+# something happened with this one and its not trustable anymore
+library(dplyr)
+library(tidyr)
+library(readr)
+
+# 0) Recreate stroke counts with consistent sex labels (Male/Female)
+stroke_counts_total <- slsr_clean_icd10_prepped %>%
+  mutate(
+    sex = case_when(
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# Quick check: total strokes
+total_strokes_from_counts <- sum(stroke_counts_total$stroke_n, na.rm = TRUE)
+message("Total strokes (from counts): ", total_strokes_from_counts)
+# Compare to your known total (e.g., ~7661). If mismatch, we investigate upstream.
+
+# 1) Recreate population person-years with consistent sex labels
+pop_person_years <- pop_full_interpolated_with_imd %>%
+  mutate(
+    # collapse age bands to your analysis groups
+    age_group = case_when(
+      age_group %in% c("18-19", "20-24") ~ "18-24",
+      age_group == "25-29" ~ "25-29",
+      age_group == "30-34" ~ "30-34",
+      age_group == "35-39" ~ "35-39",
+      age_group == "40-44" ~ "40-44",
+      age_group == "45-49" ~ "45-49",
+      age_group == "50-54" ~ "50-54",
+      age_group == "55-59" ~ "55-59",
+      age_group == "60-64" ~ "60-64",
+      age_group == "65-69" ~ "65-69",
+      age_group == "70-74" ~ "70-74",
+      age_group %in% c("75-79", "80-84", "85+") ~ "75+",
+      TRUE ~ NA_character_
+    ),
+    ethnicity_group = case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other", "Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024",
+      TRUE ~ NA_character_
+    ),
+    sex = case_when(                # make sure sex matches strokes
+      sex == 1 ~ "Male",
+      sex == 2 ~ "Female",
+      sex == "M" ~ "Male",
+      sex == "F" ~ "Female",
+      TRUE ~ as.character(sex)
+    )
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex), !is.na(period)) %>%
+  group_by(period, age_group, sex, ethnicity_group) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop")
+
+# Guard: ensure population table has unique keys
+dups <- pop_person_years %>%
+  count(period, age_group, sex, ethnicity_group) %>%
+  filter(n > 1)
+stopifnot(nrow(dups) == 0)  # fails if duplicates exist
+
+# 2) Join population with stroke counts (one row per stratum)
+crude_rates_all_strata <- pop_person_years %>%
+  left_join(stroke_counts_total,
+            by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(stroke_n = tidyr::replace_na(stroke_n, 0))
+
+# Cross‑check: summing over ethnicity-specific rows should equal total strokes
+sum_strokes_by_eth <- crude_rates_all_strata %>%
+  group_by(period) %>%
+  summarise(strokes = sum(stroke_n), .groups = "drop")
+
+message("Total strokes from joined (ethnicity-specific): ",
+        sum(sum_strokes_by_eth$strokes))
+
+# 3) Create "All" ethnicity rows (collapse across ethnicities) — **this duplicates totals on purpose**
+crude_rates_all_ethnicity <- crude_rates_all_strata %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "All")
+
+# Cross‑check: "All" rows sum should equal ethnicity‑specific sum (per period/sex)
+check_totals <- crude_rates_all_ethnicity %>%
+  group_by(period) %>%
+  summarise(strokes_all = sum(stroke_n), .groups = "drop") %>%
+  left_join(sum_strokes_by_eth, by = "period") %>%
+  mutate(equal_check = strokes_all == strokes)
+
+print(check_totals)
+# All TRUE in equal_check -> good.
+
+# 4) Bind them (now the frame contains ethnicity-specific rows **plus** the "All" ethnicity rows)
+crude_rates_all_combined <- bind_rows(crude_rates_all_strata, crude_rates_all_ethnicity)
+
+# IMPORTANT: do NOT sum stroke_n over the entire combined table (that double-counts by design).
+# When you need totals, filter either ethnicity != "All" OR ethnicity == "All", not both simultaneously.
+
+# Example sanity summaries:
+message("Sum strokes (ethnicity-specific only): ",
+        crude_rates_all_combined %>% filter(ethnicity_group != "All") %>% summarise(sum(stroke_n)) %>% pull())
+message("Sum strokes (ethnicity == 'All' only): ",
+        crude_rates_all_combined %>% filter(ethnicity_group == "All") %>% summarise(sum(stroke_n)) %>% pull())
+
+# ===== Getting the time comparisons ======
+period_pairs <- tibble::tribble(
+  ~ref,        ~comp,
+  "1995-1999", "2000-2004",
+  "2000-2004", "2005-2009",
+  "2005-2009", "2010-2014",
+  "2010-2014", "2015-2019",
+  "2015-2019", "2020-2024"
+)
+
+library(broom)
+
+run_safe_model <- function(df, ref_period, comp_period) {
+  df_sub <- df %>% 
+    filter(period %in% c(ref_period, comp_period)) %>%
+    group_by(age_group) %>%
+    filter(sum(stroke_n) > 0) %>%      # drop age groups with 0 cases in both periods
+    ungroup()
+  
+  if (nrow(df_sub) == 0) return(NULL)  # skip if nothing left
+  
+  df_sub <- df_sub %>% 
+    mutate(period = relevel(factor(period), ref = ref_period))
+  
+  fit <- glm(
+    stroke_n ~ period + age_group,
+    offset = log(person_years),
+    family = poisson(link = "log"),
+    data = df_sub
+  )
+  
+  broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(term == paste0("period", comp_period)) %>%
+    transmute(
+      comparison = paste(comp_period, "vs", ref_period),
+      IRR = estimate,
+      lower_CI = conf.low,
+      upper_CI = conf.high,
+      p.value,
+      p.value_fmt = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+      IRR_label = paste0(
+        sprintf("%.2f", IRR), " (", sprintf("%.2f", lower_CI), "–", sprintf("%.2f", upper_CI),
+        "), p=", p.value_fmt
+      ),
+      change = case_when(
+        p.value < 0.05 & IRR > 1 ~ "↑",
+        p.value < 0.05 & IRR < 1 ~ "↓",
+        TRUE ~ "↔"
+      )
+    )
+}
+
+period_pairs <- tibble::tribble(
+  ~ref,        ~comp,
+  "1995-1999", "2000-2004",
+  "2000-2004", "2005-2009",
+  "2005-2009", "2010-2014",
+  "2010-2014", "2015-2019",
+  "2015-2019", "2020-2024"
+)
+
+# 0) Ensure sex labels match between counts and denominators
+#    (you already did the Male/Female mapping when creating stroke_counts_total)
+#    We assume pop_person_years$sex already uses "Male"/"Female".
+
+# 1) Rebuild df_ethnicity (counts + person-years per stratum)
+df_ethnicity <- pop_person_years %>%
+  left_join(stroke_counts_total,
+            by = c("period", "age_group", "sex", "ethnicity_group")) %>%
+  mutate(
+    stroke_n     = tidyr::replace_na(stroke_n, 0),
+    person_years = as.numeric(person_years)
+  ) %>%
+  # guardrails to avoid offsets/log(0) and NA factors
+  filter(!is.na(period), !is.na(age_group), !is.na(sex), !is.na(ethnicity_group)) %>%
+  filter(!is.na(person_years) & person_years > 0) %>%
+  mutate(
+    # set factor refs so comparisons are well-defined
+    period = factor(period, levels = c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")),
+    age_group = factor(age_group, levels = c("18-24","25-29","30-34","35-39","40-44",
+                                             "45-49","50-54","55-59","60-64","65-69","70-74","75+")),
+    sex = factor(sex, levels = c("Male","Female")),
+    ethnicity_group = factor(ethnicity_group, levels = c("White","Black African","Black Caribbean","Other"))
+  )
+
+# Continue
+irr_ethnicity <- df_ethnicity %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  purrr::map_dfr(function(df_group) {
+    purrr::map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  }) %>%
+  select(ethnicity_group, sex, comparison, IRR_label, change, everything())
+
+# And total
+library(dplyr)
+library(broom)
+library(purrr)
+
+run_safe_model <- function(df, ref_period, comp_period) {
+  df_sub <- df %>% 
+    filter(period %in% c(ref_period, comp_period)) %>%
+    group_by(age_group) %>%
+    filter(sum(stroke_n) > 0) %>%      # drop age groups with 0 cases in both periods
+    ungroup()
+  
+  if (nrow(df_sub) == 0) return(NULL)
+  
+  df_sub <- df_sub %>% 
+    mutate(period = relevel(factor(period), ref = ref_period))
+  
+  fit <- glm(
+    stroke_n ~ period + age_group,
+    offset = log(person_years),
+    family = poisson(link = "log"),
+    data = df_sub
+  )
+  
+  broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(term == paste0("period", comp_period)) %>%
+    transmute(
+      comparison = paste(comp_period, "vs", ref_period),
+      IRR = estimate,
+      lower_CI = conf.low,
+      upper_CI = conf.high,
+      p.value,
+      p.value_fmt = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+      IRR_label = paste0(
+        sprintf("%.2f", IRR), " (", sprintf("%.2f", lower_CI), "–", sprintf("%.2f", upper_CI),
+        "), p=", p.value_fmt
+      ),
+      change = case_when(
+        p.value < 0.05 & IRR > 1 ~ "↑",
+        p.value < 0.05 & IRR < 1 ~ "↓",
+        TRUE ~ "↔"
+      )
+    )
+}
+period_pairs <- tibble::tribble(
+  ~ref,        ~comp,
+  "1995-1999", "2000-2004",
+  "2000-2004", "2005-2009",
+  "2005-2009", "2010-2014",
+  "2010-2014", "2015-2019",
+  "2015-2019", "2020-2024"
+)
+df_total <- df_ethnicity %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population")
+
+irr_total <- df_total %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# Total population, ALL sexes combined (Total × Total)
+df_total_allsex <- df_ethnicity %>%
+  group_by(period, age_group) %>%
+  summarise(
+    stroke_n    = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ethnicity_group = "Total population",
+    sex = "All"
+  )
+
+irr_total_allsex <- df_total_allsex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  purrr::map_dfr(function(df_group) {
+    purrr::map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)  # "All"
+      }
+      res
+    })
+  })
+
+irr_all <- dplyr::bind_rows(
+  irr_ethnicity,        # ethnicity × sex
+  irr_total,            # Total population × Men/Women (if you want to keep)
+  irr_total_allsex      # Total population × All
+) %>%
+  dplyr::select(ethnicity_group, sex, comparison, IRR_label, change, dplyr::everything())
+
+# 1) Create per-ethnicity ALL-sex totals
+df_ethnicity_allsex <- df_ethnicity %>%
+  dplyr::group_by(period, age_group, ethnicity_group) %>%
+  dplyr::summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(sex = "All")
+
+# 2) IRRs for per-ethnicity ALL-sex
+irr_ethnicity_allsex <- df_ethnicity_allsex %>%
+  dplyr::group_by(ethnicity_group, sex) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(function(df_group) {
+    purrr::map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)  # "All"
+      }
+      res
+    })
+  })
+
+# 3) Replace irr_ethnicity with ethnicity×(Female/Male) + ethnicity×All
+irr_ethnicity_full <- dplyr::bind_rows(
+  irr_ethnicity,          # ethnicity × Female/Male
+  irr_ethnicity_allsex    # ethnicity × All
+)
+
+# 4) Final combined table incl. Total population blocks
+irr_all <- dplyr::bind_rows(
+  irr_ethnicity_full,   # ethnicity × All/Female/Male
+  irr_total,            # Total population × Female/Male
+  irr_total_allsex      # Total population × All
+) %>%
+  dplyr::select(ethnicity_group, sex, comparison, IRR_label, change, dplyr::everything())
+
+# Formatting
+
+library(dplyr)
+library(flextable)
+library(writexl)
+
+# Define order for ethnicity and sex
+eth_order <- c("Total population", "Black African", "Black Caribbean", "Other", "White")
+sex_order <- c("All", "Female", "Male")
+
+# Format table
+irr_all_formatted <- irr_all %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex = factor(sex, levels = sex_order),
+    significant = p.value < 0.005
+  ) %>%
+  arrange(ethnicity_group, sex, comparison) %>%
+  select(
+    Ethnicity = ethnicity_group,
+    Sex = sex,
+    Comparison = comparison,
+    `IRR (95% CI), p` = IRR_label,
+    Change = change,
+    significant
+  )
+
+# Flextable with merged Ethnicity cells & bold arrows when significant
+ft_irr_all <- flextable(irr_all_formatted) %>%
+  merge_v(j = "Ethnicity") %>%
+  bold(i = ~ significant == TRUE, j = "Change") %>%
+  autofit()
+
+# Save to Excel without helper column
+write_xlsx(
+  irr_all_formatted %>%
+    select(-significant),
+  path = "IRR_all_ethnicity_table.xlsx"
+)
+
+# Preview flextable in RStudio
+ft_irr_all
+
+
+# === By subtype =====
+# Prepparing the datasets
+# Ischaemic
+stroke_counts_isch <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "Ischaemic") %>%
+  mutate(
+    sex = ifelse(sex %in% c(1, "M"), "Male", "Female")
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# PICH
+stroke_counts_pich <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "PICH") %>%
+  mutate(
+    sex = ifelse(sex %in% c(1, "M"), "Male", "Female")
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# SAH
+stroke_counts_sah <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "SAH") %>%
+  mutate(
+    sex = ifelse(sex %in% c(1, "M"), "Male", "Female")
+  ) %>%
+  count(period, age_group, sex, ethnicity_group, name = "stroke_n")
+
+# Merge with PY
+library(dplyr)
+library(tidyr)
+
+# keys shared by counts and population PY
+by_keys <- c("period", "age_group", "sex", "ethnicity_group")
+
+# helper to build a subtype df with FULL denominators
+make_subtype_df <- function(prepped_cases, subtype, pop_person_years) {
+  stroke_counts <- prepped_cases %>%
+    filter(stroke_type == subtype) %>%
+    mutate(
+      sex = case_when(
+        sex %in% c(1, "M") ~ "Male",
+        sex %in% c(2, "F") ~ "Female",
+        TRUE ~ as.character(sex)
+      )
+    ) %>%
+    count(dplyr::across(all_of(by_keys)), name = "stroke_n")
+
+  # start from ALL PY (everyone at risk), then add subtype strokes (fill NAs with 0)
+  pop_person_years %>%
+    left_join(stroke_counts, by = by_keys) %>%
+    mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+}
+
+# build the three subtype datasets (now PY won't be undercounted)
+isch_df <- make_subtype_df(slsr_clean_icd10_prepped, "Ischaemic", pop_person_years)
+pich_df <- make_subtype_df(slsr_clean_icd10_prepped, "PICH",      pop_person_years)
+sah_df  <- make_subtype_df(slsr_clean_icd10_prepped, "SAH",       pop_person_years)
+
+# sanity checks: PY should equal the total at-risk PY from pop_person_years for ALL subtypes
+total_py_all <- pop_person_years %>% summarise(total_py_all = sum(person_years, na.rm = TRUE))
+isch_df  %>% summarise(total_strokes = sum(stroke_n), total_py = sum(person_years)) %>% bind_cols(total_py_all)
+pich_df  %>% summarise(total_strokes = sum(stroke_n), total_py = sum(person_years)) %>% bind_cols(total_py_all)
+sah_df   %>% summarise(total_strokes = sum(stroke_n), total_py = sum(person_years)) %>% bind_cols(total_py_all)
+
+# Debugging why not working
+by_keys <- c("period","age_group","sex","ethnicity_group")
+
+fix_dash <- function(x) {
+  x <- as.character(x)
+  x <- gsub("\u2013|\u2014", "-", x)   # en/em dash -> hyphen
+  x <- gsub("\\s*-\\s*", "-", x)       # trim spaces around dash
+  trimws(x)
+}
+
+recode_sex <- function(x){
+  dplyr::case_when(
+    x %in% c(1,"1","M","Male","male") ~ "Male",
+    x %in% c(2,"2","F","Female","female") ~ "Female",
+    TRUE ~ as.character(x)
+  )
+}
+
+# Clean **both** tables used in the join
+slsr_clean_icd10_prepped <- slsr_clean_icd10_prepped %>%
+  mutate(
+    period = fix_dash(period),
+    age_group = fix_dash(age_group),
+    sex = recode_sex(sex),
+    ethnicity_group = trimws(as.character(ethnicity_group))
+  )
+
+pop_person_years <- pop_person_years %>%
+  mutate(
+    period = fix_dash(period),
+    age_group = fix_dash(age_group),
+    sex = recode_sex(sex),
+    ethnicity_group = trimws(as.character(ethnicity_group))
+  ) %>%
+  group_by(across(all_of(by_keys))) %>%           # enforce uniqueness
+  summarise(person_years = sum(person_years), .groups="drop")
+
+stroke_counts_isch <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "Ischaemic") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+isch_df <- pop_person_years %>%
+  left_join(stroke_counts_isch, by = by_keys) %>%
+  mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+
+# === Ischaemic ===
+library(dplyr)
+library(purrr)
+library(broom)
+
+# 1) IRRs by ethnicity × sex
+irr_isch_ethxsex <- isch_df %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 2) Ethnicity × All-sex
+isch_eth_allsex <- isch_df %>%
+  group_by(period, age_group, ethnicity_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(sex = "All")
+
+irr_isch_eth_allsex <- isch_eth_allsex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 3) Total population × sex
+isch_total_sex <- isch_df %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population")
+
+irr_isch_total_sex <- isch_total_sex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 4) Total population × All
+isch_total_all <- isch_df %>%
+  group_by(period, age_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population", sex = "All")
+
+irr_isch_total_all <- isch_total_all %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 5) Bind and format
+irr_isch_all <- bind_rows(
+  irr_isch_ethxsex,
+  irr_isch_eth_allsex,
+  irr_isch_total_sex,
+  irr_isch_total_all
+) %>%
+  select(ethnicity_group, sex, comparison, IRR_label, change, everything())
+
+# Optional: Order and format
+eth_order <- c("Total population", "Black African", "Black Caribbean", "Other", "White")
+sex_order <- c("All", "Female", "Male")
+
+irr_isch_formatted <- irr_isch_all %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex = factor(sex, levels = sex_order),
+    significant = p.value < 0.005
+  ) %>%
+  arrange(ethnicity_group, sex, comparison)
+
+# == PICH and SAH ===
+library(dplyr)
+library(purrr)
+library(broom)
+
+
+stroke_counts_pich <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "PICH") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+pich_df <- pop_person_years %>%
+  left_join(stroke_counts_pich, by = by_keys) %>%
+  mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+
+# Check
+pich_df %>%
+  summarise(
+    total_strokes = sum(stroke_n, na.rm = TRUE),
+    total_person_years = sum(person_years, na.rm = TRUE)
+  )
+
+
+# 1) IRRs by ethnicity × sex
+irr_pich_ethxsex <- pich_df %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 2) Ethnicity × All-sex
+pich_eth_allsex <- pich_df %>%
+  group_by(period, age_group, ethnicity_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(sex = "All")
+
+irr_pich_eth_allsex <- pich_eth_allsex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 3) Total population × sex
+pich_total_sex <- pich_df %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population")
+
+irr_pich_total_sex <- pich_total_sex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 4) Total population × All
+pich_total_all <- pich_df %>%
+  group_by(period, age_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population", sex = "All")
+
+irr_pich_total_all <- pich_total_all %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 5) Bind and format
+irr_pich_all <- bind_rows(
+  irr_pich_ethxsex,
+  irr_pich_eth_allsex,
+  irr_pich_total_sex,
+  irr_pich_total_all
+) %>%
+  select(ethnicity_group, sex, comparison, IRR_label, change, everything())
+
+# Optional: Order and format
+eth_order <- c("Total population", "Black African", "Black Caribbean", "Other", "White")
+sex_order <- c("All", "Female", "Male")
+
+irr_pich_formatted <- irr_pich_all %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex = factor(sex, levels = sex_order),
+    significant = p.value < 0.005
+  ) %>%
+  arrange(ethnicity_group, sex, comparison)
+
+# === And SAH =====
+stroke_counts_sah <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "SAH") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+sah_df <- pop_person_years %>%
+  left_join(stroke_counts_sah, by = by_keys) %>%
+  mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+
+# Check
+sah_df %>%
+  summarise(
+    total_strokes = sum(stroke_n, na.rm = TRUE),
+    total_person_years = sum(person_years, na.rm = TRUE)
+  )
+
+
+# 1) IRRs by ethnicity × sex
+irr_sah_ethxsex <- sah_df %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 2) Ethnicity × All-sex
+sah_eth_allsex <- sah_df %>%
+  group_by(period, age_group, ethnicity_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(sex = "All")
+
+irr_sah_eth_allsex <- sah_eth_allsex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 3) Total population × sex
+sah_total_sex <- sah_df %>%
+  group_by(period, age_group, sex) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population")
+
+irr_sah_total_sex <- sah_total_sex %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 4) Total population × All
+sah_total_all <- sah_df %>%
+  group_by(period, age_group) %>%
+  summarise(
+    stroke_n = sum(stroke_n, na.rm = TRUE),
+    person_years = sum(person_years, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(ethnicity_group = "Total population", sex = "All")
+
+irr_sah_total_all <- sah_total_all %>%
+  group_by(ethnicity_group, sex) %>%
+  group_split() %>%
+  map_dfr(function(df_group) {
+    map_dfr(1:nrow(period_pairs), function(i) {
+      res <- run_safe_model(df_group, period_pairs$ref[i], period_pairs$comp[i])
+      if (!is.null(res)) {
+        res$ethnicity_group <- unique(df_group$ethnicity_group)
+        res$sex <- unique(df_group$sex)
+      }
+      res
+    })
+  })
+
+# 5) Bind and format
+irr_sah_all <- bind_rows(
+  irr_sah_ethxsex,
+  irr_sah_eth_allsex,
+  irr_sah_total_sex,
+  irr_sah_total_all
+) %>%
+  select(ethnicity_group, sex, comparison, IRR_label, change, everything())
+
+# Optional: Order and format
+eth_order <- c("Total population", "Black African", "Black Caribbean", "Other", "White")
+sex_order <- c("All", "Female", "Male")
+
+irr_sah_formatted <- irr_sah_all %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, levels = eth_order),
+    sex = factor(sex, levels = sex_order),
+    significant = p.value < 0.005
+  ) %>%
+  arrange(ethnicity_group, sex, comparison)
+
+# == lets create total_df as well as the rest___
+
+total_df <- pop_person_years %>%
+  left_join(stroke_counts_total, by = by_keys) %>%
+  mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+
+# we have now: 
+# total_df ** total strokes**
+# isch_df ** ischaemic strokes**
+# pich_df ** pich strokes**
+# sah_df ** sah strokes**
+
+library(writexl)
+library(dplyr)
+
+# (Optional) add a subtype column to each for clarity if you export the long versions too
+irr_all_formatted_out  <- irr_all_formatted  %>% mutate(Subtype = "Total strokes")
+irr_isch_formatted_out <- irr_isch_formatted %>% mutate(Subtype = "Ischaemic")
+irr_pich_formatted_out <- irr_pich_formatted %>% mutate(Subtype = "PICH")
+irr_sah_formatted_out  <- irr_sah_formatted  %>% mutate(Subtype = "SAH")
+
+# Choose an output path/name
+out_path <- "IRR_by_period_all_and_subtypes.xlsx"
+
+# Write each table to its own sheet
+write_xlsx(
+  list(
+    "Total_strokes" = irr_all_formatted_out %>% select(-Subtype),  # same structure as before
+    "Ischaemic"     = irr_isch_formatted_out %>% select(-Subtype),
+    "PICH"          = irr_pich_formatted_out %>% select(-Subtype),
+    "SAH"           = irr_sah_formatted_out %>% select(-Subtype)
+  ),
+  path = out_path
+)
+
+message("Saved: ", out_path)
+
+
+# -----------------------------------------------------
+# Age- and Sex-adjusted Poisson (Bias-Reduced) — Tidy
+# -----------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(dplyr); library(purrr); library(broom); library(brglm2); library(writexl)
+})
+
+# 0) Standard factor settings (ensure consistent refs everywhere)
+ref_levels_eth <- c("White","Black African","Black Caribbean","Other")
+ref_levels_sex <- c("Male","Female")
+ref_levels_age <- c("18-24","25-29","30-34","35-39","40-44","45-49",
+                    "50-54","55-59","60-64","65-69","70-74","75+")
+
+# Helper to normalise a modelling table (keeps zero-event strata!)
+prep_model_df <- function(df){
+  df %>%
+    mutate(
+      ethnicity_group = factor(as.character(ethnicity_group), levels = ref_levels_eth),
+      sex            = factor(as.character(sex), levels = ref_levels_sex),
+      age_group      = factor(as.character(age_group), levels = ref_levels_age, ordered = TRUE),
+      period         = as.character(period)  # keep free text, we subset by value
+    ) %>%
+    filter(!is.na(person_years) & person_years > 0) %>%      # avoid log(0)
+    mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+}
+
+# 1) One-period model: All-sex (adjust for age+sex), bias-reduced Poisson
+fit_allsex_one_period <- function(df, period_label){
+  dfp <- df %>% filter(period == period_label)
+  if (nrow(dfp) == 0) return(NULL)
+
+  fit <- glm(
+    stroke_n ~ ethnicity_group + age_group + sex,
+    offset = log(person_years),
+    family = poisson("log"),
+    data   = dfp,
+    method = "brglmFit"
+  )
+
+  broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(grepl("^ethnicity_group", term)) %>%
+    mutate(
+      ethnicity = sub("^ethnicity_group", "", term),
+      period    = period_label,
+      `IRR (95% CI), p` = sprintf("%.2f (%.2f–%.2f), p=%s",
+                                  estimate, conf.low, conf.high,
+                                  ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)))
+    ) %>%
+    transmute(period, Sex = "All", ethnicity, IRR = estimate,
+              lower_CI = conf.low, upper_CI = conf.high, p.value, `IRR (95% CI), p`)
+}
+
+# 2) One-period model: Sex-stratified (adjust for age only), bias-reduced Poisson
+fit_bysex_one_period <- function(df, period_label, sex_label){
+  dfp <- df %>% filter(period == period_label, sex == sex_label)
+  if (nrow(dfp) == 0) return(NULL)
+
+  fit <- glm(
+    stroke_n ~ ethnicity_group + age_group,    # sex removed (stratified)
+    offset = log(person_years),
+    family = poisson("log"),
+    data   = dfp,
+    method = "brglmFit"
+  )
+
+  broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(grepl("^ethnicity_group", term)) %>%
+    mutate(
+      ethnicity = sub("^ethnicity_group", "", term),
+      period    = period_label,
+      Sex       = sex_label,
+      `IRR (95% CI), p` = sprintf("%.2f (%.2f–%.2f), p=%s",
+                                  estimate, conf.low, conf.high,
+                                  ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)))
+    ) %>%
+    transmute(period, Sex, ethnicity, IRR = estimate,
+              lower_CI = conf.low, upper_CI = conf.high, p.value, `IRR (95% CI), p`)
+}
+
+# 3) Wrapper to run all periods for a given modelling table
+run_ethnicity_vs_white <- function(df){
+  periods <- sort(unique(df$period))
+  # All-sex
+  allsex <- map_dfr(periods, ~ fit_allsex_one_period(df, .x))
+  # By sex
+  bysex  <- map_dfr(periods, ~ bind_rows(
+    fit_bysex_one_period(df, .x, "Male"),
+    fit_bysex_one_period(df, .x, "Female")
+  ))
+  bind_rows(allsex, bysex) %>%
+    arrange(factor(Sex, levels=c("All","Female","Male")), period, ethnicity)
+}
+
+# ---------- Build tidy model tables for each dataset ----------
+
+# Ensure your four dfs exist and are prepared:
+# total_df, isch_df, pich_df, sah_df (each with period, age_group, sex, ethnicity_group, stroke_n, person_years)
+total_df_m <- prep_model_df(total_df)
+isch_df_m  <- prep_model_df(isch_df)
+pich_df_m  <- prep_model_df(pich_df)
+sah_df_m   <- prep_model_df(sah_df)
+
+irr_total <- run_ethnicity_vs_white(total_df_m)
+irr_isch  <- run_ethnicity_vs_white(isch_df_m)
+irr_pich  <- run_ethnicity_vs_white(pich_df_m)
+irr_sah   <- run_ethnicity_vs_white(sah_df_m)
+
+# Optional: pretty order for output
+eth_order_out <- c("White","Black African","Black Caribbean","Other") # rows have IRRs vs White
+sex_order_out <- c("All","Female","Male")
+
+format_for_export <- function(x){
+  x %>%
+    mutate(
+      ethnicity = factor(ethnicity, levels = eth_order_out),
+      Sex       = factor(Sex,       levels = sex_order_out)
+    ) %>%
+    arrange(Sex, period, ethnicity) %>%
+    select(Sex, period, Ethnicity = ethnicity, `IRR (95% CI), p`, IRR, lower_CI, upper_CI, p.value)
+}
+
+irr_total_fmt <- format_for_export(irr_total)
+irr_isch_fmt  <- format_for_export(irr_isch)
+irr_pich_fmt  <- format_for_export(irr_pich)
+irr_sah_fmt   <- format_for_export(irr_sah)
+
+# ---------- Save all to one Excel ----------
+out_path <- "IRR_ethnicity_vs_white_AgeSexAdj_ALL_and_subtypes_brglm.xlsx"
+write_xlsx(
+  list(
+    "Total_strokes" = irr_total_fmt,
+    "Ischaemic"     = irr_isch_fmt,
+    "PICH"          = irr_pich_fmt,
+    "SAH"           = irr_sah_fmt
+  ),
+  path = out_path
+)
+message("Saved: ", out_path)
+
+# ------------------------------------------------------------------
+# Forest plots for Age/sex-adjusted IRRs vs White (bias-reduced Poisson)
+# ------------------------------------------------------------------
+
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+# palettes
+ethnicity_colours <- c(
+  "White" = "#E64173",
+  "Black African" = "#984EA3",
+  "Black Caribbean" = "#FF7F00",
+  "Other" = "#377EB8"
+)
+ethnicity_shapes <- c(
+  "White" = 16,
+  "Black African" = 17,
+  "Black Caribbean" = 15,
+  "Other" = 18
+)
+
+# consistent period order
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+
+prep_forest_df <- function(df) {
+  df %>%
+    mutate(
+      period    = factor(period, levels = period_levels),
+      ethnicity = factor(ethnicity, levels = names(ethnicity_colours)),
+      Sex       = factor(Sex, levels = c("All","Female","Male"))
+    )
+}
+
+plot_forest_allsex <- function(df, title_text, subtitle_text = "Age & sex adjusted vs White") {
+  df <- prep_forest_df(df) %>% filter(Sex == "All")
+  ggplot(
+    df,
+    aes(y = period, x = IRR, xmin = lower_CI, xmax = upper_CI,
+        colour = ethnicity, shape = ethnicity)
+  ) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey40") +
+    geom_pointrange(position = position_dodge(width = 0.6), linewidth = 0.5) +
+    scale_x_log10(name = "Incidence Rate Ratio (log scale)") +
+    scale_y_discrete(name = "Period") +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(title = title_text, subtitle = subtitle_text) +
+    theme_minimal(base_size = 16) +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      axis.title.y = element_text(margin = margin(r = 8))
+    )
+}
+
+plot_forest_bysex <- function(df, title_text, subtitle_text = "Age adjusted vs White") {
+  df <- prep_forest_df(df) %>% filter(Sex %in% c("Male","Female"))
+  ggplot(
+    df,
+    aes(y = period, x = IRR, xmin = lower_CI, xmax = upper_CI,
+        colour = ethnicity, shape = ethnicity)
+  ) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey40") +
+    geom_pointrange(position = position_dodge(width = 0.6), linewidth = 0.5) +
+    scale_x_log10(name = "Incidence Rate Ratio (log scale)") +
+    scale_y_discrete(name = "Period") +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(title = title_text, subtitle = subtitle_text) +
+    theme_minimal(base_size = 16) +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      strip.text.y = element_text(face = "bold"),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      axis.title.y = element_text(margin = margin(r = 8))
+    ) +
+    facet_grid(rows = vars(Sex))
+}
+
+# -------- Build the plots (uses irr_total / irr_isch / irr_pich / irr_sah) --------
+
+# All-sex panels
+p_total_all <- plot_forest_allsex(irr_total, "All Strokes — IRR by Ethnicity (All Sexes)")
+p_isch_all  <- plot_forest_allsex(irr_isch,  "Ischaemic — IRR by Ethnicity (All Sexes)")
+p_pich_all  <- plot_forest_allsex(irr_pich,  "PICH — IRR by Ethnicity (All Sexes)")
+p_sah_all   <- plot_forest_allsex(irr_sah,   "SAH — IRR by Ethnicity (All Sexes)")
+
+# By-sex panels
+p_total_bysex <- plot_forest_bysex(irr_total, "All Strokes — IRR by Ethnicity (Male/Female)")
+p_isch_bysex  <- plot_forest_bysex(irr_isch,  "Ischaemic — IRR by Ethnicity (Male/Female)")
+p_pich_bysex  <- plot_forest_bysex(irr_pich,  "PICH — IRR by Ethnicity (Male/Female)")
+p_sah_bysex   <- plot_forest_bysex(irr_sah,   "SAH — IRR by Ethnicity (Male/Female)")
+
+# -------- Save high-res PNGs --------
+ggsave("forest_total_all.png", p_total_all, width = 8, height = 6, dpi = 300)
+ggsave("forest_isch_all.png",  p_isch_all,  width = 8, height = 6, dpi = 300)
+ggsave("forest_pich_all.png",  p_pich_all,  width = 8, height = 6, dpi = 300)
+ggsave("forest_sah_all.png",   p_sah_all,   width = 8, height = 6, dpi = 300)
+
+ggsave("forest_total_bysex.png", p_total_bysex, width = 8, height = 8, dpi = 300)
+ggsave("forest_isch_bysex.png",  p_isch_bysex,  width = 8, height = 8, dpi = 300)
+ggsave("forest_pich_bysex.png",  p_pich_bysex,  width = 8, height = 8, dpi = 300)
+ggsave("forest_sah_bysex.png",   p_sah_bysex,   width = 8, height = 8, dpi = 300)
+
+# -----------------------------------------------------
+# IMD – Age & Sex–adjusted Poisson (bias-reduced) + Forest plots
+# -----------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(purrr); library(stringr)
+  library(broom); library(brglm2); library(writexl); library(rlang); library(ggplot2); library(tibble)
+})
+
+# ---------- 0) Small helpers you used earlier ----------
+fix_dash <- function(x) { x |>
+  as.character() |>
+  gsub("\u2013|\u2014", "-", x = _) |>
+  gsub("\\s*-\\s*", "-", x = _) |>
+  trimws()
+}
+recode_sex <- function(x) dplyr::case_when(
+  x %in% c(1,"1","M","Male","male") ~ "Male",
+  x %in% c(2,"2","F","Female","female") ~ "Female",
+  TRUE ~ as.character(x)
+)
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+eth_levels   <- c("White","Black African","Black Caribbean","Other")
+age_levels   <- c("18-24","25-29","30-34","35-39","40-44","45-49",
+                  "50-54","55-59","60-64","65-69","70-74","75+")
+
+# collapse population imd_quintile to 1 / 2 / 3–5
+pop_person_years_imd <- pop_full_interpolated_with_imd %>%
+  mutate(
+    # age bins to match case data
+    age_group = dplyr::case_when(
+      age_group %in% c("18-19","20-24") ~ "18-24",
+      age_group %in% c("25-29","30-34","35-39","40-44","45-49",
+                       "50-54","55-59","60-64","65-69","70-74") ~ age_group,
+      age_group %in% c("75-79","80-84","85+") ~ "75+",
+      TRUE ~ NA_character_
+    ),
+    ethnicity_group = dplyr::case_when(
+      ethnicity_grouped == "White" ~ "White",
+      ethnicity_grouped == "Black Caribbean" ~ "Black Caribbean",
+      ethnicity_grouped == "Black African" ~ "Black African",
+      ethnicity_grouped %in% c("Black Other","Other") ~ "Other",
+      TRUE ~ NA_character_
+    ),
+    period = dplyr::case_when(
+      year >= 1995 & year <= 1999 ~ "1995-1999",
+      year >= 2000 & year <= 2004 ~ "2000-2004",
+      year >= 2005 & year <= 2009 ~ "2005-2009",
+      year >= 2010 & year <= 2014 ~ "2010-2014",
+      year >= 2015 & year <= 2019 ~ "2015-2019",
+      year >= 2020 & year <= 2024 ~ "2020-2024",
+      TRUE ~ NA_character_
+    ),
+    sex = recode_sex(sex),
+
+    # use existing imd_quintile (1..5), then collapse to “1 / 2 / 3–5”
+    imd_quintile = as.numeric(imd_quintile),
+    imd_quintile = dplyr::case_when(
+      is.na(imd_quintile)      ~ NA_character_,
+      imd_quintile == 1        ~ "1",
+      imd_quintile == 2        ~ "2",
+      imd_quintile %in% 3:5    ~ "3-5",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(age_group), !is.na(ethnicity_group), !is.na(sex),
+         !is.na(period), !is.na(imd_quintile)) %>%
+  group_by(period, age_group, sex, ethnicity_group, imd_quintile) %>%
+  summarise(person_years = sum(pop_count_interp, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    period          = factor(period, levels = period_levels),
+    ethnicity_group = factor(ethnicity_group, levels = eth_levels),
+    sex             = factor(sex, levels = c("Male","Female")),
+    age_group       = factor(age_group, levels = age_levels, ordered = TRUE),
+    imd_quintile    = factor(imd_quintile, levels = c("3-5","2","1"))  # ref = "3-5"
+  )
+
+# if your case data has imd_quintile already, we just collapse; else compute from decile
+slsr_clean_icd10_prepped <- slsr_clean_icd10_prepped %>%
+  mutate(
+    imd_quint_src = dplyr::coalesce(
+      suppressWarnings(as.numeric(imd_quintile)),
+      suppressWarnings(ceiling(as.numeric(imd_decile)/2))
+    ),
+    imd_quintile = dplyr::case_when(
+      is.na(imd_quint_src)    ~ NA_character_,
+      imd_quint_src == 1      ~ "1",
+      imd_quint_src == 2      ~ "2",
+      imd_quint_src %in% 3:5  ~ "3-5",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Rebuild the analysis
+by_keys_imd <- c("period","age_group","sex","ethnicity_group","imd_quintile")
+
+build_df_with_imd <- function(st_type = c("Total","Ischaemic","PICH","SAH")) {
+  st_type <- match.arg(st_type)
+  cases <- if (st_type == "Total") slsr_clean_icd10_prepped else
+    dplyr::filter(slsr_clean_icd10_prepped, stroke_type == st_type)
+
+  stroke_counts <- cases %>%
+    filter(!is.na(imd_quintile)) %>%
+    count(dplyr::across(all_of(by_keys_imd)), name = "stroke_n")
+
+  pop_person_years_imd %>%
+    left_join(stroke_counts, by = by_keys_imd) %>%
+    mutate(stroke_n = tidyr::replace_na(stroke_n, 0L))
+}
+
+total_df_imd <- build_df_with_imd("Total")
+isch_df_imd  <- build_df_with_imd("Ischaemic")
+pich_df_imd  <- build_df_with_imd("PICH")
+sah_df_imd   <- build_df_with_imd("SAH")
+
+# quick sanity
+# No missing IMD in analysis frames?
+sapply(list(total_df_imd, isch_df_imd, pich_df_imd, sah_df_imd),
+       function(x) sum(is.na(x$imd_quintile)))
+
+# Keys align cleanly?
+setdiff(names(total_df_imd),  c(by_keys_imd, "person_years", "stroke_n"))
+
+
+# write_xlsx(list(total=total_df_imd, isch=isch_df_imd, pich=pich_df_imd, sah=sah_df_imd), "check_imd_inputs.xlsx")
+
+# -----------------------
+# Clean IMD-adjusted BRGLM
+# -----------------------
+
+suppressPackageStartupMessages({
+  library(dplyr); library(stringr); library(tidyr)
+  library(purrr); library(brglm2); library(broom); library(writexl); library(tibble)
+})
+
+# ---------- 0) Global refs & helpers ----------
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+eth_levels    <- c("White","Black African","Black Caribbean","Other")
+age_levels    <- c("18-24","25-29","30-34","35-39","40-44","45-49","50-54","55-59","60-64","65-69","70-74","75+")
+sex_levels    <- c("Female","Male")  # <- sex ref = Female (only affects sex coefficient in all-sex models)
+
+# Ensure per-period order is consistent
+order_periods <- function(x) factor(as.character(x), levels = period_levels)
+
+# ---------- 1) Clean & set factor refs for GLM ----------
+set_factor_levels_imd3 <- function(df) {
+  df %>%
+    mutate(
+      period          = order_periods(period),
+      ethnicity_group = factor(as.character(ethnicity_group), levels = eth_levels),  # White is baseline
+      sex             = factor(as.character(sex), levels = sex_levels),              # Female is baseline
+      age_group       = factor(as.character(age_group), levels = age_levels, ordered = TRUE),
+      imd_quintile    = factor(as.character(imd_quintile), levels = c("3-5","2","1")) # 3-5 baseline
+    )
+}
+
+clean_for_glm <- function(df) {
+  df %>%
+    filter(
+      !is.na(stroke_n), is.finite(stroke_n),
+      !is.na(person_years), is.finite(person_years), person_years > 0,
+      !is.na(ethnicity_group), !is.na(age_group), !is.na(sex), !is.na(imd_quintile),
+      !is.na(period)
+    )
+}
+
+# ---------- 2) Tidy method for brglm2 fits (ethnicity terms only) ----------
+tidy_ethnicity_terms_brglm <- function(fit, extra_cols = list()) {
+  coefs <- coef(fit); V <- vcov(fit); se <- sqrt(diag(V))
+  ci_low  <- coefs - qnorm(0.975) * se
+  ci_high <- coefs + qnorm(0.975) * se
+  p_vals  <- 2 * pnorm(-abs(coefs / se))
+
+  tibble(
+    term     = names(coefs),
+    estimate = exp(coefs),
+    conf.low = exp(ci_low),
+    conf.high= exp(ci_high),
+    p.value  = p_vals
+  ) %>%
+    filter(str_starts(term, "ethnicity_group")) %>%  # only ethnicity contrasts vs White
+    mutate(
+      ethnicity      = sub("^ethnicity_group", "", term),
+      p_value_fmt    = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+      `IRR (95% CI), p` = sprintf("%.2f (%.2f–%.2f), p=%s", estimate, conf.low, conf.high, p_value_fmt)
+    ) %>%
+    select(ethnicity, `IRR (95% CI), p`, estimate, conf.low, conf.high, p.value) %>%
+    bind_cols(as_tibble(extra_cols))
+}
+
+# ---------- 3) Model runners (overall and by sex), with optional per-period ----------
+run_brglm_ethnicity <- function(df, label = NULL, by_period = TRUE) {
+  dat <- df %>% clean_for_glm() %>% set_factor_levels_imd3()
+  if (by_period) {
+    map_dfr(levels(dat$period), function(per) {
+      dsub <- filter(dat, period == per)
+      if (!nrow(dsub)) return(tibble())
+      fit <- glm(
+        stroke_n ~ ethnicity_group + age_group + sex + imd_quintile,
+        data   = dsub,
+        offset = log(person_years),
+        family = poisson(link = "log"),
+        method = "brglmFit"
+      )
+      tidy_ethnicity_terms_brglm(fit, list(period = per, group = label %||% "Total", sex = "All"))
+    }) %>% arrange(period, ethnicity)
+  } else {
+    fit <- glm(
+      stroke_n ~ ethnicity_group + age_group + sex + imd_quintile,
+      data   = dat,
+      offset = log(person_years),
+      family = poisson(link = "log"),
+      method = "brglmFit"
+    )
+    tidy_ethnicity_terms_brglm(fit, list(group = label %||% "Total", sex = "All"))
+  }
+}
+
+run_brglm_ethnicity_bysex <- function(df, label = NULL, by_period = TRUE) {
+  dat <- df %>% clean_for_glm() %>% set_factor_levels_imd3()
+  sexes <- sex_levels  # c("Female","Male") -> models run within each sex; ref ethnicity = White of that sex
+  if (by_period) {
+    map_dfr(levels(dat$period), function(per) {
+      map_dfr(sexes, function(sx) {
+        dsub <- filter(dat, period == per, sex == sx)
+        if (!nrow(dsub) || length(unique(dsub$ethnicity_group)) < 2) return(tibble())
+        fit <- glm(
+          stroke_n ~ ethnicity_group + age_group + imd_quintile,  # sex removed (we're stratified)
+          data   = dsub,
+          offset = log(person_years),
+          family = poisson(link = "log"),
+          method = "brglmFit"
+        )
+        tidy_ethnicity_terms_brglm(fit, list(period = per, group = label %||% "Total", sex = sx))
+      })
+    }) %>% arrange(sex, period, ethnicity)
+  } else {
+    map_dfr(sexes, function(sx) {
+      dsub <- filter(dat, sex == sx)
+      if (!nrow(dsub) || length(unique(dsub$ethnicity_group)) < 2) return(tibble())
+      fit <- glm(
+        stroke_n ~ ethnicity_group + age_group + imd_quintile,
+        data   = dsub,
+        offset = log(person_years),
+        family = poisson(link = "log"),
+        method = "brglmFit"
+      )
+      tidy_ethnicity_terms_brglm(fit, list(group = label %||% "Total", sex = sx))
+    }) %>% arrange(sex, ethnicity)
+  }
+}
+
+# ---------- 4) Run models for Total + subtypes ----------
+BY_PERIOD <- TRUE
+
+irr_total_overall_br <- run_brglm_ethnicity(total_df_imd, label = "Total",      by_period = BY_PERIOD)
+irr_total_bysex_br   <- run_brglm_ethnicity_bysex(total_df_imd, label = "Total",by_period = BY_PERIOD)
+
+irr_isch_overall_br  <- run_brglm_ethnicity(isch_df_imd,  label = "Ischaemic",  by_period = BY_PERIOD)
+irr_isch_bysex_br    <- run_brglm_ethnicity_bysex(isch_df_imd,  label = "Ischaemic",  by_period = BY_PERIOD)
+
+irr_pich_overall_br  <- run_brglm_ethnicity(pich_df_imd,  label = "PICH",       by_period = BY_PERIOD)
+irr_pich_bysex_br    <- run_brglm_ethnicity_bysex(pich_df_imd,  label = "PICH",       by_period = BY_PERIOD)
+
+irr_sah_overall_br   <- run_brglm_ethnicity(sah_df_imd,   label = "SAH",        by_period = BY_PERIOD)
+irr_sah_bysex_br     <- run_brglm_ethnicity_bysex(sah_df_imd,   label = "SAH",        by_period = BY_PERIOD)
+
+# ---------- 5) Save all results ----------
+write_xlsx(
+  list(
+    "Total_Overall"     = irr_total_overall_br,
+    "Total_BySex"       = irr_total_bysex_br,
+    "Ischaemic_Overall" = irr_isch_overall_br,
+    "Ischaemic_BySex"   = irr_isch_bysex_br,
+    "PICH_Overall"      = irr_pich_overall_br,
+    "PICH_BySex"        = irr_pich_bysex_br,
+    "SAH_Overall"       = irr_sah_overall_br,
+    "SAH_BySex"         = irr_sah_bysex_br
+  ),
+  path = "IRR_brglm_results.xlsx"
+)
+
+# =========================
+# Forest plots (IMD-adjusted)
+# =========================
+library(ggplot2)
+library(dplyr)
+
+# --- styles (match your palette + bigger text/lines) ---
+ethnicity_colours <- c(
+  "White"          = "#E64173",
+  "Black African"  = "#984EA3",
+  "Black Caribbean"= "#FF7F00",
+  "Other"          = "#377EB8"
+)
+ethnicity_shapes  <- c("White"=16, "Black African"=17, "Black Caribbean"=15, "Other"=18)
+
+# Ensure consistent period & ethnicity ordering
+prep_forest_df <- function(df) {
+  df %>%
+    mutate(
+      period    = factor(period, levels = c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")),
+      ethnicity = factor(ethnicity, levels = names(ethnicity_colours))
+    ) %>%
+    arrange(period, ethnicity)
+}
+
+# All-sex model (sex adjusted in model)
+plot_forest_allsex <- function(df, title_text,
+                               subtitle_text = "Age, sex & IMD adjusted; reference = White") {
+  d <- prep_forest_df(df) %>% filter(sex == "All")
+  ggplot(
+    d,
+    aes(y = period, x = estimate, xmin = conf.low, xmax = conf.high,
+        colour = ethnicity, shape = ethnicity)
+  ) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50", linewidth = 0.6) +
+    geom_pointrange(position = position_dodge(width = 0.7), linewidth = 0.7) +
+    scale_x_log10(name = "Incidence Rate Ratio (log scale)") +
+    scale_y_discrete(name = "Period") +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(title = title_text, subtitle = subtitle_text) +
+    guides(colour = guide_legend(nrow = 1), shape = guide_legend(nrow = 1)) +
+    theme_minimal(base_size = 18) +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.title.x = element_text(margin = margin(t = 6)),
+      axis.title.y = element_text(margin = margin(r = 6))
+    )
+}
+
+# Sex-stratified (sex not in model; comparisons within sex)
+plot_forest_one_sex <- function(df, sex_label, title_text,
+                                subtitle_text = "Age & IMD adjusted; reference = White (within sex)") {
+  d <- prep_forest_df(df) %>% filter(sex == sex_label)
+  ggplot(
+    d,
+    aes(y = period, x = estimate, xmin = conf.low, xmax = conf.high,
+        colour = ethnicity, shape = ethnicity, group = ethnicity)
+  ) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50", linewidth = 0.6) +
+    geom_pointrange(position = position_dodge(width = 0.7), linewidth = 0.7) +
+    scale_x_log10(name = "Incidence Rate Ratio (log scale)") +
+    scale_y_discrete(name = "Period") +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(title = paste0(title_text, " — ", sex_label), subtitle = subtitle_text) +
+    guides(colour = guide_legend(nrow = 1), shape = guide_legend(nrow = 1)) +
+    theme_minimal(base_size = 18) +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.title.x = element_text(margin = margin(t = 6)),
+      axis.title.y = element_text(margin = margin(r = 6))
+    )
+}
+
+# ---------- Render objects ----------
+# Overall (all sexes)
+p_total_all <- plot_forest_allsex(irr_total_overall_br, "All Stroke — IRR by Ethnicity (All Sexes)")
+p_isch_all  <- plot_forest_allsex(irr_isch_overall_br,  "Ischaemic Stroke — IRR by Ethnicity (All Sexes)")
+p_pich_all  <- plot_forest_allsex(irr_pich_overall_br,  "PICH Stroke — IRR by Ethnicity (All Sexes)")
+p_sah_all   <- plot_forest_allsex(irr_sah_overall_br,   "SAH Stroke — IRR by Ethnicity (All Sexes)")
+
+# Sex-stratified
+p_total_female <- plot_forest_one_sex(irr_total_bysex_br, "Female", "Total Stroke")
+p_total_male   <- plot_forest_one_sex(irr_total_bysex_br, "Male",   "Total Stroke")
+
+p_isch_female  <- plot_forest_one_sex(irr_isch_bysex_br,  "Female", "Ischaemic Stroke")
+p_isch_male    <- plot_forest_one_sex(irr_isch_bysex_br,  "Male",   "Ischaemic Stroke")
+
+p_pich_female  <- plot_forest_one_sex(irr_pich_bysex_br,  "Female", "PICH Stroke")
+p_pich_male    <- plot_forest_one_sex(irr_pich_bysex_br,  "Male",   "PICH Stroke")
+
+p_sah_female   <- plot_forest_one_sex(irr_sah_bysex_br,   "Female", "SAH Stroke")
+p_sah_male     <- plot_forest_one_sex(irr_sah_bysex_br,   "Male",   "SAH Stroke")
+
+# ==============================================================
+# Ethnicity × IMD Poisson (IRRs) + Marginal Incidence with CIs
+# Clean, self-contained helpers + exports + plots
+# ==============================================================
+
+# Sanity check on the DF
+check_counts <- function(df, name) {
+  df %>%
+    summarise(
+      n_rows      = n(),
+      total_cases = sum(stroke_n, na.rm = TRUE),
+      total_py    = sum(person_years, na.rm = TRUE)
+    ) %>%
+    mutate(dataset = name, .before = 1)
+}
+
+bind_rows(
+  check_counts(total_df_imd, "Total"),
+  check_counts(isch_df_imd,  "Ischaemic"),
+  check_counts(pich_df_imd,  "PICH"),
+  check_counts(sah_df_imd,   "SAH")
+)
+
+# ---- packages ----
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(tibble); library(forcats)
+  library(ggplot2); library(emmeans); library(openxlsx); library(MASS)
+})
+
+# ---- inputs expected to exist in your session ----
+# total_df_imd, isch_df_imd, pich_df_imd, sah_df_imd
+needed <- c("total_df_imd","isch_df_imd","pich_df_imd","sah_df_imd")
+stopifnot(all(needed %in% ls()))
+
+# ---- reference level helpers (derive if not pre-defined) ----
+eth_levels <- c("White","Black African","Black Caribbean","Other")
+sex_levels <- c("Male","Female")
+age_levels <- c("18-24","25-29","30-34","35-39","40-44","45-49",
+                "50-54","55-59","60-64","65-69","70-74","75+")
+imd_levels <- c("3-5","2","1")   # "3-5" is reference (least deprived bucket)
+period_levels <- c("1995-1999","2000-2004","2005-2009","2010-2014","2015-2019","2020-2024")
+
+# ---- clean / relevel for glm ----
+relevel_for_glm <- function(df) {
+  df %>%
+    mutate(
+      period          = factor(as.character(period), levels = intersect(period_levels, unique(as.character(period)))),
+      ethnicity_group = factor(as.character(ethnicity_group), levels = eth_levels),
+      sex             = factor(as.character(sex), levels = sex_levels),
+      age_group       = factor(as.character(age_group), levels = age_levels, ordered = TRUE),
+      imd_quintile    = factor(as.character(imd_quintile), levels = imd_levels)
+    )
+}
+
+clean_for_glm <- function(df) {
+  df %>%
+    filter(
+      is.finite(stroke_n), !is.na(stroke_n),
+      is.finite(person_years), !is.na(person_years), person_years > 0,
+      !is.na(ethnicity_group), !is.na(age_group), !is.na(sex), !is.na(imd_quintile)
+    )
+}
+
+# ==============================================================
+# A) Interaction models (Ethnicity × IMD) — IRRs vs White & IMD "3-5"
+# ==============================================================
+
+library(conflicted)
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+
+run_eth_imd_interaction_full <- function(data, sex_filter = NULL) {
+  dat <- data %>%
+    clean_for_glm() %>%
+    relevel_for_glm() %>%
+    dplyr::mutate(
+      ethnicity_group = forcats::fct_relevel(ethnicity_group, "White"),
+      imd_quintile    = forcats::fct_relevel(imd_quintile, "3-5")
+    )
+
+  if (!is.null(sex_filter)) dat <- droplevels(dplyr::filter(dat, sex == sex_filter))
+
+  form <- if (nlevels(dat$sex) >= 2) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+
+  fit <- glm(form, offset = log(person_years), family = poisson("log"), data = dat)
+
+  emm <- emmeans::emmeans(fit, ~ ethnicity_group * imd_quintile, type = "response")
+  ref_row <- which(with(as.data.frame(emm),
+                        ethnicity_group == "White" & imd_quintile == "3-5"))
+
+  ct <- emmeans::contrast(emm, method = "trt.vs.ctrl", ref = ref_row,
+                          type = "response", infer = c(TRUE, TRUE))
+  out_raw <- tibble::as_tibble(ct)
+
+  # Normalise column names across emmeans versions
+  col_exists <- function(nm) nm %in% names(out_raw)
+  get_col <- function(primary, alt) dplyr::coalesce(out_raw[[primary]], out_raw[[alt]])
+
+  irr_col <- dplyr::coalesce(
+    if (col_exists("ratio")) out_raw$ratio else NULL,
+    if (col_exists("response")) out_raw$response else NULL,
+    if (col_exists("rate")) out_raw$rate else NULL
+  )
+
+  conf_low  <- dplyr::coalesce(
+    if (col_exists("lower.CL")) out_raw$lower.CL else NULL,
+    if (col_exists("asymp.LCL")) out_raw$asymp.LCL else NULL
+  )
+  conf_high <- dplyr::coalesce(
+    if (col_exists("upper.CL")) out_raw$upper.CL else NULL,
+    if (col_exists("asymp.UCL")) out_raw$asymp.UCL else NULL
+  )
+
+  out <- out_raw %>%
+    # Pull the lhs "(Ethnicity IMD)" from "… / (White 3-5)"
+    tidyr::extract(contrast, into = c("ethnicity_group","imd_quintile"),
+                   regex = "^\\(?([^()]+?)\\s+(\\d+-?\\d*)\\)?\\s*/.*$") %>%
+    dplyr::mutate(
+      irr       = irr_col,
+      conf.low  = conf_low,
+      conf.high = conf_high,
+      irr_label = sprintf("%.2f (%.2f–%.2f)", irr, conf.low, conf.high),
+      sex_group = ifelse(is.null(sex_filter), "All", sex_filter)
+    ) %>%
+    dplyr::select(sex_group, ethnicity_group, imd_quintile,
+                  irr, conf.low, conf.high, p.value, irr_label)
+
+  # Explicit reference row (White, IMD 3–5)
+  ref_row_df <- tibble::tibble(
+    sex_group = unique(out$sex_group)[1],
+    ethnicity_group = "White",
+    imd_quintile = "3-5",
+    irr = 1, conf.low = 1, conf.high = 1,
+    p.value = NA_real_, irr_label = "1.00 (1.00–1.00)"
+  )
+
+  dplyr::bind_rows(out, ref_row_df) %>%
+    dplyr::arrange(ethnicity_group, imd_quintile)
+}
+
+irr_all_classes <- dplyr::bind_rows(
+  run_all_for_class_full(total_df_imd, "Total"),
+  run_all_for_class_full(isch_df_imd,  "Ischaemic"),
+  run_all_for_class_full(pich_df_imd,  "PICH"),
+  run_all_for_class_full(sah_df_imd,   "SAH")
+)
+
+# Save IRRs (interaction) to Excel
+wb_irr <- createWorkbook()
+for (nm in split(irr_all_classes, irr_all_classes$stroke_class) |> names()) {
+  addWorksheet(wb_irr, nm)
+  writeData(wb_irr, nm, irr_all_classes %>% filter(stroke_class == nm))
+}
+saveWorkbook(wb_irr, "IRR_ethxIMD_allClasses_bySex.xlsx", overwrite = TRUE)
+
+# ==============================================================
+# B) Forest plots for IRRs (interaction models)
+# ==============================================================
+
+ethnicity_colours <- c("White"="#E64173","Black African"="#984EA3","Black Caribbean"="#FF7F00","Other"="#377EB8")
+ethnicity_shapes  <- c("White"=16,"Black African"=17,"Black Caribbean"=15,"Other"=18)
+
+prep_forest_df <- function(df) {
+  df %>%
+    mutate(
+      # these IRRs are not period-specific; keep factors for consistent ordering
+      ethnicity = factor(ethnicity_group, levels = names(ethnicity_colours)),
+      imd_label = recode(as.character(imd_quintile), "1"="IMD 1","2"="IMD 2","3-5"="IMD ≥3"),
+      imd_label = factor(imd_label, levels = c("IMD 1","IMD 2","IMD ≥3"))
+    )
+}
+
+plot_forest_irrs <- function(df, title_text, subtitle_text = "IRR vs White & IMD ≥3 (age/sex adjusted)") {
+  d <- prep_forest_df(df)
+  ggplot(d, aes(y = imd_label, x = irr, xmin = conf.low, xmax = conf.high,
+                colour = ethnicity, shape = ethnicity)) +
+    geom_vline(xintercept = 1, linetype = "dashed", colour = "grey40") +
+    geom_pointrange(position = position_dodge(width = 0.6), linewidth = 0.5) +
+    scale_x_log10(name = "Incidence Rate Ratio (log scale)") +
+    scale_y_discrete(name = "Deprivation group") +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(title = title_text, subtitle = subtitle_text) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "bottom", legend.title = element_blank())
+}
+
+# Examples (overall sex = "All"):
+p_total_irrs   <- plot_forest_irrs(irr_all_classes %>% filter(stroke_class=="Total",     sex_group=="All"),
+                                   "All Stroke — Ethnicity × IMD IRRs")
+p_isch_irrs    <- plot_forest_irrs(irr_all_classes %>% filter(stroke_class=="Ischaemic", sex_group=="All"),
+                                   "Ischaemic — Ethnicity × IMD IRRs")
+p_pich_irrs    <- plot_forest_irrs(irr_all_classes %>% filter(stroke_class=="PICH",      sex_group=="All"),
+                                   "PICH — Ethnicity × IMD IRRs")
+p_sah_irrs     <- plot_forest_irrs(irr_all_classes %>% filter(stroke_class=="SAH",       sex_group=="All"),
+                                   "SAH — Ethnicity × IMD IRRs")
+
+# ==============================================================
+# C) Marginal incidence per 100k (full cohort) with bootstrap CIs # These are super low ! 
+# ==============================================================
+
+marginal_incidence_full <- function(df, sex_filter = NULL, nboot = 1000, seed = 202) {
+  set.seed(seed)
+
+  dat <- df %>%
+    clean_for_glm() %>% relevel_for_glm()
+
+  if (!is.null(sex_filter)) dat <- droplevels(filter(dat, sex == sex_filter))
+
+  # Age–sex weights from observed PY in THIS subset
+  w_tbl <- dat %>%
+    group_by(age_group, sex) %>%
+    summarise(w = sum(person_years), .groups = "drop") %>%
+    mutate(w = as.numeric(w) / sum(w))
+
+  # Model (drop 'sex' if only one level remains)
+  form <- if (nlevels(dat$sex) >= 2) {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group + sex
+  } else {
+    stroke_n ~ ethnicity_group * imd_quintile + age_group
+  }
+  fit <- glm(form, offset = log(person_years), family = poisson("log"), data = dat)
+
+  # Prediction grid: all Eth×IMD × age×sex with PY=1 (offset=0)
+  lev <- fit$xlevels
+  grid <- expand.grid(
+    ethnicity_group = lev$ethnicity_group,
+    imd_quintile    = lev$imd_quintile,
+    age_group       = lev$age_group,
+    sex             = if (!is.null(lev$sex)) lev$sex else levels(dat$sex)[1],
+    KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE
+  ) %>%
+    as_tibble() %>%
+    mutate(person_years = 1) %>%
+    left_join(w_tbl, by = c("age_group","sex")) %>%
+    mutate(w = tidyr::replace_na(w, 0))
+
+  # Model matrix for correct contrasts
+  TT <- delete.response(terms(fit))
+  X  <- model.matrix(TT, data = grid, contrasts.arg = fit$contrasts)
+
+  # Point estimate
+  eta  <- as.vector(X %*% coef(fit))
+  rate <- exp(eta)
+  grid$rate <- rate
+
+  point <- grid %>%
+    group_by(ethnicity_group, imd_quintile) %>%
+    summarise(incidence_per_100k = sum(rate * w) * 1e5, .groups = "drop")
+
+  # Bootstrap CIs
+  coefs <- coef(fit); V <- vcov(fit)
+  key   <- paste(point$ethnicity_group, point$imd_quintile, sep = " | ")
+  boot_mat <- matrix(NA_real_, nrow = nboot, ncol = nrow(point),
+                     dimnames = list(NULL, key))
+
+  for (b in seq_len(nboot)) {
+    beta_b <- MASS::mvrnorm(1, mu = coefs, Sigma = V)
+    rate_b <- exp(as.vector(X %*% beta_b))
+    agg_b  <- tapply(rate_b * grid$w,
+                     INDEX = paste(grid$ethnicity_group, grid$imd_quintile, sep = " | "),
+                     FUN = sum)
+    boot_mat[b, ] <- as.numeric(agg_b[key]) * 1e5
+  }
+
+  qs <- apply(boot_mat, 2, quantile, probs = c(0.025, 0.975), na.rm = TRUE)
+  out <- point %>%
+    mutate(lower_CI = as.numeric(qs[1, ]), upper_CI = as.numeric(qs[2, ]),
+           sex_group = ifelse(is.null(sex_filter), "All", sex_filter)) %>%
+    arrange(ethnicity_group, imd_quintile)
+
+  out
+}
+
+# Run margins for each stroke class and sex groups
+stroke_data_list <- list(
+  Total     = total_df_imd,
+  Ischaemic = isch_df_imd,
+  PICH      = pich_df_imd,
+  SAH       = sah_df_imd
+)
+
+all_margins <- lapply(names(stroke_data_list), function(type) {
+  df <- stroke_data_list[[type]]
+  bind_rows(
+    marginal_incidence_full(df, NULL,     nboot = 1000),
+    marginal_incidence_full(df, "Female", nboot = 1000),
+    marginal_incidence_full(df, "Male",   nboot = 1000)
+  ) %>% mutate(
+    stroke_class = type, .before = 1,
+    ci_label = sprintf("%.1f (%.1f–%.1f)",
+                       round(incidence_per_100k, 1),
+                       round(lower_CI, 1),
+                       round(upper_CI, 1))
+  )
+})
+names(all_margins) <- names(stroke_data_list)
+
+# Save margins to Excel (one sheet per stroke class)
+wb_marg <- createWorkbook()
+for (type in names(all_margins)) {
+  addWorksheet(wb_marg, type)
+  writeData(wb_marg, type, all_margins[[type]])
+}
+saveWorkbook(wb_marg, "marginal_incidence_fullCohort_bySex_allClasses_withCIs.xlsx", overwrite = TRUE)
+
+# ==============================================================
+# D) Plot marginal incidence (bars with 95% CI)
+# ==============================================================
+
+margins_df <- bind_rows(all_margins) %>%
+  mutate(
+    imd_label = recode(as.character(imd_quintile), "1"="IMD 1","2"="IMD 2","3-5"="IMD ≥3"),
+    imd_label = factor(imd_label, levels = c("IMD 1","IMD 2","IMD ≥3")),
+    ethnicity_group = factor(ethnicity_group,
+                             levels = c("Black African","Black Caribbean","Other","White")),
+    sex_group = factor(sex_group, levels = c("All","Female","Male")),
+    stroke_class = factor(stroke_class, levels = c("Total","Ischaemic","PICH","SAH"))
+  )
+
+imd_purples <- c("IMD 1"="#E6DAF4","IMD 2"="#B48CD8","IMD ≥3"="#7E57C2")
+stroke_labels <- c("Total"="Total strokes","Ischaemic"="Ischaemic stroke",
+                   "PICH"="Primary intracerebral haemorrhage","SAH"="Subarachnoid haemorrhage")
+sex_labels <- c("All"="Total population","Female"="Females","Male"="Males")
+
+plot_margins_bar3 <- function(df, stroke, sex, file = NULL) {
+  pd <- position_dodge(width = 0.75)
+  p <- df %>%
+    filter(stroke_class == stroke, sex_group == sex) %>%
+    ggplot(aes(x = ethnicity_group, y = incidence_per_100k, fill = imd_label)) +
+    geom_col(position = pd, width = 0.72, colour = "white", linewidth = 0.3) +
+    geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI),
+                  position = pd, width = 0.18, linewidth = 0.6) +
+    scale_fill_manual(values = imd_purples, name = "Deprivation (IMD)") +
+    labs(
+      title = paste(stroke_labels[stroke], "—", sex_labels[sex]),
+      x = "Ethnicity",
+      y = "Age–sex adjusted incidence per 100,000 (95% CI)"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      legend.box = "vertical",
+      plot.title = element_text(face = "bold")
+    )
+  if (!is.null(file)) ggsave(file, p, width = 7.5, height = 4.8, dpi = 300)
+  p
+}
+
+# Example renders (no files written):
+p_total_all_m   <- plot_margins_bar3(margins_df, "Total",     "All")
+p_total_f_m     <- plot_margins_bar3(margins_df, "Total",     "Female")
+p_total_m_m     <- plot_margins_bar3(margins_df, "Total",     "Male")
+p_isch_all_m    <- plot_margins_bar3(margins_df, "Ischaemic", "All")
+p_pich_all_m    <- plot_margins_bar3(margins_df, "PICH",      "All")
+p_sah_all_m     <- plot_margins_bar3(margins_df, "SAH",       "All")
+
+# Batch export all combinations (optional):
+for (st in levels(margins_df$stroke_class)) {
+  for (sx in levels(margins_df$sex_group)) {
+    fn <- paste0("margins_", gsub(" ", "", st), "_", sx, ".png")
+    plot_margins_bar3(margins_df, stroke = st, sex = sx, file = fn)
+  }
+}
+
+# ==============================================================
+# Done 🎉
+# ==============================================================
