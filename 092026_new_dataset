@@ -1373,6 +1373,67 @@ plot_ischaemic
 plot_pich
 plot_sah
 
+# ======= Plot them with dashed CIs =======
+library(ggplot2)
+library(dplyr)
+
+ethnic_groups_to_plot <- c("White", "Black African", "Black Caribbean", "Other")
+
+plot_stroke_asir <- function(df, stroke_subtype) {
+  df %>%
+    filter(
+      stroke_type == stroke_subtype,
+      ethnicity_group %in% ethnic_groups_to_plot
+    ) %>%
+    ggplot(aes(
+      x = period, y = asir,
+      colour = ethnicity_group,
+      shape = ethnicity_group,
+      group = ethnicity_group
+    )) +
+    geom_line(linewidth = 1) +
+    # 95% CI as dashed lines with caps
+    geom_errorbar(
+      aes(ymin = lower_ci, ymax = upper_ci),
+      linetype = "dashed",
+      width = 0.08,       # small horizontal caps at ends
+      linewidth = 0.6,
+      alpha = 0.8
+    ) +
+    geom_point(size = 3) +
+    scale_colour_manual(values = ethnicity_colours) +
+    scale_shape_manual(values = ethnicity_shapes) +
+    labs(
+      title = paste("Age- and Sex-Standardised Incidence Rates:", stroke_subtype),
+      y = "ASIR per 100,000",
+      x = "Period",
+      colour = "Ethnicity",
+      shape = "Ethnicity"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+# Generate plots
+plot_total     <- plot_stroke_asir(all_stroke_asir, "Total")
+plot_ischaemic <- plot_stroke_asir(all_stroke_asir, "Ischaemic")
+plot_pich      <- plot_stroke_asir(all_stroke_asir, "PICH")
+plot_sah       <- plot_stroke_asir(all_stroke_asir, "SAH")
+
+# Show plots
+plot_total
+plot_ischaemic
+plot_pich
+plot_sah
+
+# Save each plot
+ggsave("ASIR_Total_dashed.png", plot_total, width = 8, height = 5, dpi = 600)
+ggsave("ASIR_Ischaemic_dashed.png", plot_ischaemic, width = 8, height = 5, dpi = 600)
+ggsave("ASIR_PICH_dashed.png", plot_pich, width = 8, height = 5, dpi = 600)
+ggsave("ASIR_SAH_dashed.png", plot_sah, width = 8, height = 5, dpi = 600)
 
 # === Now lets do sex stratified ======
 stroke_counts_sex <- slsr_clean_icd10_prepped %>%
