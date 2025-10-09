@@ -5789,5 +5789,18 @@ age_tbl <- age_summary_pub %>%
 pvals_wide <- pvals_wide %>%
   mutate(comparison = trimws(as.character(comparison)))
 
+# ------------------------------------------------------------
+# Checking comments
+# ------------------------------------------------------------
 
+# Checking age at first stroke
+library(dplyr)
 
+crude_age_eth_sex <- slsr_clean_imd_groups %>%
+  group_by(ethnicity_group, age_group, sex_group) %>%
+  summarise(
+    strokes = n(),
+    person_years = sum(person_years, na.rm = TRUE),
+    crude_rate = (strokes / person_years) * 100000
+  ) %>%
+  ungroup()
