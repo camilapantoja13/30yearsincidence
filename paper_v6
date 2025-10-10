@@ -5794,13 +5794,100 @@ pvals_wide <- pvals_wide %>%
 # ------------------------------------------------------------
 
 # Checking age at first stroke
-library(dplyr)
 
-crude_age_eth_sex <- slsr_clean_imd_groups %>%
-  group_by(ethnicity_group, age_group, sex_group) %>%
-  summarise(
-    strokes = n(),
-    person_years = sum(person_years, na.rm = TRUE),
-    crude_rate = (strokes / person_years) * 100000
+library(dplyr)
+library(stringr)
+
+# ---- 1) Harmonise and recode ----
+
+# a) Ethnicity mapping (pop has "Black Other")
+eth_map_pop <- c(
+  "White" = "White",
+  "Black African" = "Black African",
+  "Black Caribbean" = "Black Caribbean",
+  "Black Other" = "Other",
+  "Other" = "Other"
+)
+
+# b) Collapse POPULATION age bands to match CASES bands
+collapse_pop_age <- function(a) {
+  a <- str_squish(as.character(a))
+  if (a %in% c("18-19","20-24")) return("18-24")
+  if (a %in% c("25-29","30-34","35-39","40-44","45-49","50-54","55-59","60-64","65-69","70-74")) return(a)
+  if (a %in% c("75-79","80-84","85+")) return("75+")
+  return(NA_character_)
+}
+
+# c) Recode sex in CASES: assumes 1=Male, 2=Female (flip if your coding differs)
+recode_sex_cases <- function(x) {
+  ifelse(as.character(x) == "1", "Male",
+         ifelse(as.character(x) == "2", "Female", NA_character_))
+}
+
+# ---- 2) Clean datasets ----
+cases_norm <- slsr_clean_icd10_prepped %>%
+  transmute(
+    ethnicity_group = trimws(as.character(ethnicity_group)),
+    age_group = trimws(as.character(age_group)),
+    sex = recode_sex_cases(sex)
+  )
+
+pop_norm <- pop_full_interpolated_with_imd %>%
+  transmute(
+    ethnicity_group = recode(trimws(as.character(ethnicity_grouped)), !!!eth_map_pop),
+    age_group = vapply(as.character(age_group), collapse_pop_age, character(1)),
+    sex = str_to_title(str_squish(as.character(sex))),
+    person_years = as.numeric(pop_count_interp)  # summed later
+  )
+
+# ---- 3) Sanity checks on remaining mismatches ----
+setdiff(sort(unique(cases_norm$ethnicity_group)), sort(unique(pop_norm$ethnicity_group)))
+setdiff(sort(unique(cases_norm$age_group)),       sort(unique(pop_norm$age_group)))
+setdiff(sort(unique(cases_norm$sex)),             sort(unique(pop_norm$sex)))
+
+# ---- 4) Aggregate & join ----
+cases_by_eas <- cases_norm %>%
+  group_by(ethnicity_group, age_group, sex) %>%
+  summarise(strokes = n(), .groups = "drop")
+
+pyrs_by_eas <- pop_norm %>%
+  group_by(ethnicity_group, age_group, sex) %>%
+  summarise(person_years = sum(person_years, na.rm = TRUE), .groups = "drop")
+
+# See what still doesn’t match (should be empty now)
+anti_cases <- anti_join(cases_by_eas, pyrs_by_eas, by = c("ethnicity_group","age_group","sex"))
+anti_pop   <- anti_join(pyrs_by_eas, cases_by_eas, by = c("ethnicity_group","age_group","sex"))
+anti_cases; anti_pop
+
+# ---- 5) Crude rates + 95% Poisson exact CIs ----
+crude_age_eth_sex <- inner_join(cases_by_eas, pyrs_by_eas,
+                                by = c("ethnicity_group","age_group","sex")) %>%
+  mutate(
+    crude_rate = (strokes / person_years) * 1e5,
+    lower_ci = (qchisq(0.025, 2*strokes) / (2*person_years)) * 1e5,
+    upper_ci = (qchisq(0.975, 2*(strokes + 1)) / (2*person_years)) * 1e5
   ) %>%
-  ungroup()
+  arrange(ethnicity_group, sex, age_group)
+
+crude_age_eth_sex
+
+# Visualise them
+
+crude_age_eth_sex %>%
+  group_by(ethnicity_group, sex) %>%
+  summarise(
+    mean_rate = mean(crude_rate, na.rm = TRUE),
+    max_rate = max(crude_rate, na.rm = TRUE),
+    peak_age = age_group[which.max(crude_rate)]
+  )
+
+  ethnicity_group sex    mean_rate max_rate peak_age
+  <chr>           <chr>      <dbl>    <dbl> <chr>   
+1 Black African   Female      203.     856. 75+     
+2 Black African   Male        296.    1111. 75+     
+3 Black Caribbean Female      203.     891. 75+     
+4 Black Caribbean Male        277.    1028. 75+     
+5 Other           Female      119.     632. 75+     
+6 Other           Male        150.     540. 75+     
+7 White           Female      121.     681. 75+     
+8 White           Male        164.     711. 75+     
