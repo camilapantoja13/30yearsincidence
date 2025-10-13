@@ -3100,7 +3100,168 @@ write_xlsx(irr_sah_ethnicity, "irr_sah_ethnicity.xlsx")
 write_xlsx(irr_sah_ethnicity_bysex, "irr_sah_ethnicity_bysex.xlsx")
 
 # ------------------------------------------------------------------
-# Nice and new forest-plots :)
+# Checking GoF
+# ------------------------------------------------------------------
+# Example: check Poisson assumptions for 1995–1999 total strokes
+
+library(dplyr)
+library(tidyr)
+
+# 1) Recode sex in CASES to match population ("Male"/"Female")
+slsr_clean_icd10_prepped <- slsr_clean_icd10_prepped %>%
+  mutate(sex = recode(as.character(sex), "1" = "Male", "2" = "Female"))
+
+# 2) Rebuild stroke counts (TOTAL)
+stroke_counts_total <- slsr_clean_icd10_prepped %>%
+  count(period, ethnicity_group, age_group, sex, name = "stroke_n")
+
+# 3) Join to population denominators
+total_df <- pop_person_years %>%
+  left_join(stroke_counts_total,
+            by = c("period", "ethnicity_group", "age_group", "sex")) %>%
+  mutate(stroke_n = replace_na(stroke_n, 0L))
+
+install.packages("brglm2")  # if not already installed
+library(brglm2)
+
+df_period <- total_df %>% filter(period == "1995-1999")
+
+fit_total_1995 <- glm(
+  stroke_n ~ ethnicity_group + age_group + sex,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data = df_period,
+  method = "brglmFit"
+)
+
+summary(fit_total_1995)
+
+# Deviance / df
+deviance_ratio <- deviance(fit_total_1995) / df.residual(fit_total_1995)
+
+# Pearson residuals
+pearson_ratio <- sum(residuals(fit_total_1995, type = "pearson")^2) / df.residual(fit_total_1995)
+
+deviance_ratio
+pearson_ratio
+
+#Check GoF
+pchisq(deviance(fit_total_1995), df.residual(fit_total_1995), lower.tail = FALSE)
+
+# Loop
+check_overdispersion <- function(model) {
+  c(
+    dev_ratio = deviance(model)/df.residual(model),
+    pearson_ratio = sum(residuals(model, type="pearson")^2)/df.residual(model),
+    gof_p = pchisq(deviance(model), df.residual(model), lower.tail=FALSE)
+  )
+}
+
+periods <- unique(total_df$period)
+
+diagnostics <- purrr::map_dfr(periods, function(p) {
+  df_p <- total_df %>% filter(period == p)
+  fit <- glm(stroke_n ~ ethnicity_group + age_group + sex,
+             offset = log(person_years),
+             family = poisson(link = "log"),
+             data = df_p,
+             method = "brglmFit")
+  as.data.frame(t(check_overdispersion(fit))) %>% mutate(period = p)
+})
+
+diagnostics
+
+# This is still check, can skip if doing the code again. 
+
+library(dplyr)
+library(tidyr)
+
+# Define the key variables used for joining
+by_keys <- c("period", "ethnicity_group", "age_group", "sex")
+
+# --- ISCHAEMIC ---
+stroke_counts_isch <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "Ischaemic") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+isch_df <- pop_person_years %>%
+  left_join(stroke_counts_isch, by = by_keys) %>%
+  mutate(stroke_n = replace_na(stroke_n, 0L)) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, 
+                             levels = c("White", "Black African", "Black Caribbean", "Other")),
+    sex = factor(sex, levels = c("Male", "Female")),
+    age_group = factor(age_group, ordered = TRUE)
+  )
+
+# --- PICH ---
+stroke_counts_pich <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "PICH") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+pich_df <- pop_person_years %>%
+  left_join(stroke_counts_pich, by = by_keys) %>%
+  mutate(stroke_n = replace_na(stroke_n, 0L)) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, 
+                             levels = c("White", "Black African", "Black Caribbean", "Other")),
+    sex = factor(sex, levels = c("Male", "Female")),
+    age_group = factor(age_group, ordered = TRUE)
+  )
+
+# --- SAH ---
+stroke_counts_sah <- slsr_clean_icd10_prepped %>%
+  filter(stroke_type == "SAH") %>%
+  count(across(all_of(by_keys)), name = "stroke_n")
+
+sah_df <- pop_person_years %>%
+  left_join(stroke_counts_sah, by = by_keys) %>%
+  mutate(stroke_n = replace_na(stroke_n, 0L)) %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group, 
+                             levels = c("White", "Black African", "Black Caribbean", "Other")),
+    sex = factor(sex, levels = c("Male", "Female")),
+    age_group = factor(age_group, ordered = TRUE)
+  )
+
+# For subtypes
+check_overdispersion <- function(model) {
+  c(
+    dev_ratio = deviance(model)/df.residual(model),
+    pearson_ratio = sum(residuals(model, type="pearson")^2)/df.residual(model),
+    gof_p = pchisq(deviance(model), df.residual(model), lower.tail = FALSE)
+  )
+}
+
+run_poisson_diagnostics <- function(df, label) {
+  periods <- unique(df$period)
+  diagnostics <- purrr::map_dfr(periods, function(p) {
+    df_p <- df %>% filter(period == p)
+    fit <- glm(
+      stroke_n ~ ethnicity_group + age_group + sex,
+      offset = log(person_years),
+      family = poisson(link = "log"),
+      data = df_p,
+      method = "brglmFit"
+    )
+    as.data.frame(t(check_overdispersion(fit))) %>%
+      mutate(period = p, subtype = label)
+  })
+  diagnostics
+}
+
+# Run for all subtypes
+diag_total <- run_poisson_diagnostics(total_df, "Total")
+diag_isch  <- run_poisson_diagnostics(isch_df,  "Ischaemic")
+diag_pich  <- run_poisson_diagnostics(pich_df,  "PICH")
+diag_sah   <- run_poisson_diagnostics(sah_df,   "SAH")
+
+# Combine
+diagnostics_all <- bind_rows(diag_total, diag_isch, diag_pich, diag_sah)
+diagnostics_all
+
+# ------------------------------------------------------------------
+# Nice and new forest-plots for the Age-Sex adjusted poissons :)
 # ------------------------------------------------------------------
 
 # --- deps ---
@@ -3657,6 +3818,126 @@ irr_list <- list(
 
 # Save to Excel with one sheet per result
 writexl::write_xlsx(irr_list, "IRR_brglm_results.xlsx")
+
+#------ Checking GoF -----
+# --- Helpers you need in the session ---
+library(dplyr)
+library(stringr)
+library(tibble)
+
+set_factor_levels_imd3 <- function(df) {
+  df %>%
+    mutate(
+      ethnicity_group = factor(ethnicity_group,
+        levels = c("White","Black African","Black Caribbean","Other")),
+      sex = factor(sex, levels = c("Male","Female")),
+      age_group = factor(age_group),                # keep existing labels
+      imd_quintile = factor(as.character(imd_quintile),
+                            levels = c("3-5","2","1"))  # 3-5 as ref
+    )
+}
+
+clean_for_glm <- function(df) {
+  df %>%
+    filter(
+      is.finite(stroke_n), !is.na(stroke_n),
+      is.finite(person_years), person_years > 0,
+      !is.na(ethnicity_group), !is.na(age_group),
+      !is.na(sex), !is.na(imd_quintile)
+    )
+}
+
+check_overdispersion <- function(model) {
+  tibble(
+    dev_ratio     = deviance(model) / df.residual(model),
+    pearson_ratio = sum(residuals(model, type = "pearson")^2) / df.residual(model),
+    gof_p         = pchisq(deviance(model), df.residual(model), lower.tail = FALSE)
+  )
+}
+
+library(dplyr)
+library(purrr)
+library(tibble)
+library(brglm2)
+
+# List of datasets and labels
+model_inputs <- list(
+  list(df = total_df_imd, label = "Total"),
+  list(df = isch_df_imd,  label = "Ischaemic"),
+  list(df = pich_df_imd,  label = "PICH"),
+  list(df = sah_df_imd,   label = "SAH")
+)
+
+sexes <- c("Male", "Female")
+
+# Iterate
+diagnostics_imd <- map_dfr(model_inputs, function(mdat) {
+  df <- mdat$df %>% clean_for_glm() %>% set_factor_levels_imd3()
+  periods <- unique(df$period)
+  
+  map_dfr(periods, function(per) {
+    map_dfr(sexes, function(sx) {
+      dsub <- df %>% filter(period == per, sex == sx)
+      if (nrow(dsub) == 0 || sum(dsub$stroke_n) == 0) return(tibble())
+      
+      fit <- glm(
+        stroke_n ~ ethnicity_group + age_group + imd_quintile,
+        data = dsub,
+        offset = log(person_years),
+        family = poisson(link = "log"),
+        method = "brglmFit"
+      )
+      
+      check_overdispersion(fit) %>%
+        mutate(period = per, sex = sx, subtype = mdat$label)
+    })
+  })
+})
+
+diagnostics_imd
+
+writexl::write_xlsx(diagnostics_imd, "poisson_diagnostics_imd_bysex.xlsx")
+
+library(dplyr)
+library(purrr)
+library(brglm2)
+
+# Reuse helper functions (set_factor_levels_imd3, clean_for_glm, check_overdispersion)
+
+# Datasets and labels
+model_inputs_total <- list(
+  list(df = total_df_imd, label = "Total"),
+  list(df = isch_df_imd,  label = "Ischaemic"),
+  list(df = pich_df_imd,  label = "PICH"),
+  list(df = sah_df_imd,   label = "SAH")
+)
+
+# Run diagnostics by subtype and period (not stratified by sex)
+diagnostics_total <- map_dfr(model_inputs_total, function(mdat) {
+  df <- mdat$df %>% clean_for_glm() %>% set_factor_levels_imd3()
+  periods <- unique(df$period)
+  
+  map_dfr(periods, function(per) {
+    dsub <- df %>% filter(period == per)
+    if (nrow(dsub) == 0 || sum(dsub$stroke_n) == 0) return(tibble())
+    
+    fit <- glm(
+      stroke_n ~ ethnicity_group + age_group + sex + imd_quintile,
+      data = dsub,
+      offset = log(person_years),
+      family = poisson(link = "log"),
+      method = "brglmFit"
+    )
+    
+    check_overdispersion(fit) %>%
+      mutate(period = per, subtype = mdat$label)
+  })
+})
+
+diagnostics_total
+
+all_diagnostics <- bind_rows(diagnostics_total, diagnostics_imd)
+writexl::write_xlsx(all_diagnostics, "poisson_diagnostics_all.xlsx")
 
 #------ PLOT THEM -----
 
