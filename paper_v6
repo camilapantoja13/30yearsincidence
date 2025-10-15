@@ -193,7 +193,7 @@ valid_lsoas <- c(
 )
 
 # Filter dataset excluding <18y and unplausible years like >200 and exclusing if date is within STOP STROKE period *and* not in a valid LSOA 
-slsr_clean <- dataset_20250422 %>%
+sslsr_clean <- dataset_20250422 %>%
   filter(!is.na(strk_d), !is.na(strk_m), !is.na(strk_y)) %>%
   mutate(
     dtstrk = as.Date(paste(strk_y, strk_m, strk_d, sep = "-"), format = "%Y-%m-%d"),
@@ -6171,4 +6171,932 @@ crude_age_eth_sex %>%
 5 Other           Female      119.     632. 75+     
 6 Other           Male        150.     540. 75+     
 7 White           Female      121.     681. 75+     
-8 White           Male        164.     711. 75+     
+8 White           Male        164.     711. 75+   
+
+# ----------------------------------------------
+# Are inequalities widening?
+# ----------------------------------------------
+
+library(dplyr); library(brglm2); library(lmtest)
+
+df <- total_df_imd %>%
+  mutate(
+    period_f = factor(period, levels = sort(unique(period))),
+    ethnicity_group = factor(ethnicity_group, levels=c("White","Black African","Black Caribbean","Other")),
+    sex = factor(sex, levels=c("Male","Female")),
+    age_group = factor(age_group),
+    imd_quintile = factor(as.character(imd_quintile), levels=c("3-5","2","1"))
+  )
+
+library(dplyr)
+library(brglm2)
+
+# 1) Sanity checks
+sum(is.na(total_df_imd$stroke_n))
+sum(!is.finite(total_df_imd$stroke_n))
+summary(total_df_imd$person_years)
+sum(total_df_imd$person_years <= 0, na.rm = TRUE)
+sum(!is.finite(log(total_df_imd$person_years)))
+
+# 2) Rebuild a clean modelling df
+df <- total_df_imd %>%
+  mutate(
+    stroke_n     = tidyr::replace_na(stroke_n, 0L),
+    period_f     = factor(period, levels = sort(unique(period))),
+    ethnicity_group = factor(ethnicity_group, levels = c("White","Black African","Black Caribbean","Other")),
+    sex          = factor(sex, levels = c("Male","Female")),
+    age_group    = factor(age_group),
+    imd_quintile = factor(as.character(imd_quintile), levels = c("3-5","2","1"))
+  ) %>%
+  # Keep only rows that are complete and have valid denominators
+  filter(
+    !is.na(stroke_n),
+    is.finite(stroke_n),
+    !is.na(person_years),
+    is.finite(person_years),
+    person_years > 0,
+    !is.na(period_f),
+    !is.na(ethnicity_group),
+    !is.na(sex),
+    !is.na(age_group),
+    !is.na(imd_quintile)
+  )
+
+# Optional: confirm no problems remain
+stopifnot(
+  sum(is.na(df$stroke_n))==0,
+  sum(!is.finite(df$stroke_n))==0,
+  sum(df$person_years <= 0) == 0,
+  sum(!is.finite(log(df$person_years)))==0
+)
+
+# 3) Fit (bias-reduced Poisson)
+m0 <- glm(
+  stroke_n ~ ethnicity_group + period_f + age_group + sex + imd_quintile,
+  offset = log(person_years),
+  family = poisson(link = "log"),
+  data   = df,
+  method = "brglmFit"
+)
+
+summary(m0)
+
+
+# Interaction model (ethnicity × period)
+m1 <- glm(stroke_n ~ ethnicity_group * period_f + age_group + sex + imd_quintile,
+          offset = log(person_years),
+          family = poisson, data = df, method="brglmFit")
+
+lmtest::lrtest(m0, m1)
+
+# Likelihood ratio (or use a Wald test if you prefer)
+lrtest(m0, m1)   # p-value answers: “do ethnic IRRs vary by period?”
+
+# Visually inspect
+library(emmeans)
+
+emm <- emmeans(m1, ~ ethnicity_group | period_f, type = "response")
+summary(emm)
+
+# OR a simple plot
+plot(emm, comparison = TRUE)
+
+# Formally testing the change
+# Compare Black African vs White across periods
+contrast(emm, interaction = c("pairwise", "rev"), by = "period_f")  # group differences per period
+
+# Or test the *change* in difference over time:
+contrast(emm, interaction = "trt.vs.ctrl", by = NULL, adjust = "none")
+
+library(dplyr)
+library(writexl)
+library(emmeans)
+
+# 1️⃣ Save the adjusted rates
+emm_df <- as.data.frame(summary(emm)) %>%
+  mutate(
+    contrast_type = "Adjusted rates",
+    note = "Rates adjusted for age, sex, and IMD"
+  )
+
+# 2️⃣ Save pairwise comparisons (within each period)
+pairwise_df <- as.data.frame(
+  contrast(emm, interaction = c("pairwise", "rev"), by = "period_f")
+) %>%
+  mutate(
+    contrast_type = "Within-period contrasts",
+    note = "Each ratio compares ethnic groups within the same period"
+  )
+
+# 3️⃣ Save difference-in-differences (change vs 1995–1999)
+trend_diff_df <- as.data.frame(
+  contrast(emm, interaction = "trt.vs.ctrl", by = NULL, adjust = "none")
+) %>%
+  mutate(
+    contrast_type = "Change vs 1995–1999",
+    note = "Ratio > 1 = widening inequality; Ratio < 1 = narrowing"
+  )
+
+# 4️⃣ Combine all results into one Excel file
+output_list <- list(
+  "Adjusted_Rates" = emm_df,
+  "Within_Period_Contrasts" = pairwise_df,
+  "Change_vs_1995_1999" = trend_diff_df
+)
+
+write_xlsx(output_list, "Ethnicity_Period_Emmeans_Results.xlsx")
+
+# Testing to the period just before:
+# Create the contrast for each ethnicity vs White, period-to-period
+contrast(emm, interaction = "trt.vs.ctrl", by = NULL, 
+         adjust = "none", 
+         interaction_by = "period_f",
+         combine = TRUE)
+
+# Generate all period × ethnicity emmeans contrasts
+
+# 1) Make sure factors are ordered as needed
+df <- df %>%
+  mutate(
+    ethnicity_group = factor(ethnicity_group,
+      levels = c("White","Black African","Black Caribbean","Other")), # White first!
+    period_f = factor(period_f, levels = c("1995-1999","2000-2004","2005-2009",
+                                           "2010-2014","2015-2019","2020-2024"))
+  )
+
+# 2) Fit the interaction model (you already have m1)
+# m1 <- glm(stroke_n ~ ethnicity_group * period_f + age_group + sex + imd_quintile,
+#           offset = log(person_years), family = poisson, data = df, method="brglmFit")
+
+library(emmeans)
+
+# 3) Get EMMs on the interaction
+emm2 <- emmeans(m1, ~ ethnicity_group * period_f, type = "response")
+
+# 4) Period-to-period change in the ethnicity-vs-White gap
+#    interaction = c("trt.vs.ctrl","consec") = (ethnicity vs White) AND (consecutive periods)
+gap_change_consec <- contrast(
+  emm2,
+  interaction = c("trt.vs.ctrl", "consec"),
+  by = NULL,            # do it globally
+  adjust = "none"       # or "holm" / "bonferroni" if you prefer
+)
+
+# Inspect
+summary(gap_change_consec)
+
+# Make it tidy
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+
+gap_tbl <- as.data.frame(summary(gap_change_consec)) %>%
+  rename(
+    ethnicity_vs_white = ethnicity_group_trt.vs.ctrl,
+    period_pair        = period_f_consec,
+    ratio_change       = ratio,
+    z                  = z.ratio,
+    p                  = p.value
+  ) %>%
+  mutate(
+    # remove parentheses, then split "TO / FROM"
+    period_pair_clean = gsub("[()]", "", period_pair)
+  ) %>%
+  separate(period_pair_clean, into = c("period_to", "period_from"), sep = " / ") %>%
+  mutate(
+    direction = case_when(
+      ratio_change > 1 ~ "widened",
+      ratio_change < 1 ~ "narrowed",
+      TRUE ~ "no change"
+    ),
+    sig = ifelse(p < 0.05, "yes", "no")
+  ) %>%
+  select(ethnicity_vs_white, period_from, period_to,
+         ratio_change, SE, z, p, direction, sig)
+
+
+write_xlsx(gap_tbl, "ethnicity_gap_change_consecutive_periods.xlsx")
+
+# Adding the CIs
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+
+# Extract summary with CI on the response scale (exp of log-ratio)
+gap_tbl <- as.data.frame(summary(gap_change_consec, infer = c(TRUE, TRUE))) %>%
+  rename(
+    ethnicity_vs_white = ethnicity_group_trt.vs.ctrl,
+    period_pair        = period_f_consec,
+    ratio_change       = ratio,
+    SE                 = SE,
+    z                  = z.ratio,
+    p                  = p.value,
+    CI_lower           = asymp.LCL,
+    CI_upper           = asymp.UCL
+  ) %>%
+  mutate(
+    # Clean up period notation
+    period_pair_clean = gsub("[()]", "", period_pair)
+  ) %>%
+  separate(period_pair_clean, into = c("period_to", "period_from"), sep = " / ") %>%
+  mutate(
+    direction = case_when(
+      ratio_change > 1 ~ "widened",
+      ratio_change < 1 ~ "narrowed",
+      TRUE ~ "no change"
+    ),
+    sig = ifelse(p < 0.05, "yes", "no"),
+    CI_label = sprintf("%.2f (%.2f–%.2f)", ratio_change, CI_lower, CI_upper)
+  ) %>%
+  select(
+    ethnicity_vs_white, period_from, period_to,
+    ratio_change, CI_lower, CI_upper, CI_label,
+    SE, z, p, direction, sig
+  )
+
+# Save to Excel
+write_xlsx(gap_tbl, "ethnicity_gap_change_consecutive_periods_with_CI.xlsx")
+
+# View a preview
+head(gap_tbl)
+
+# ----------------------------------------------
+# Checking the CVRF
+# ----------------------------------------------
+
+library(dplyr)
+library(tidyr)
+library(emmeans)
+library(broom)
+library(purrr)
+library(stringr)
+library(binom)
+library(lmtest)
+library(writexl)
+
+
+# ---------- 0) Build analysis dataset ----------
+dat <- slsr_clean_icd10_prepped %>%
+  mutate(
+    # --- recode all correctly ---
+    hypertension = case_when(rfphyp == 2 ~ 1L, rfphyp == 1 ~ 0L, TRUE ~ NA_integer_),
+    diabetes     = case_when(rfpdia == 2 ~ 1L, rfpdia == 1 ~ 0L, TRUE ~ NA_integer_),
+    smoking      = case_when(rfsmok == 2 ~ 1L, rfsmok == 1 ~ 0L, TRUE ~ NA_integer_),
+    obesity      = ifelse(!is.na(bmindex) & bmindex >= 30, 1L,
+                          ifelse(!is.na(bmindex), 0L, NA_integer_)),
+    # --- key factors ---
+    ethnicity_group = factor(ethnicity_group,
+                             levels = c("White","Black African","Black Caribbean","Other")),
+    imd_quintile = fct_explicit_na(factor(imd_quintile, levels = c("3-5","2","1")), "Missing"),
+    period = factor(period, levels = sort(unique(period))),
+    decade = case_when(
+      period %in% c("1995-1999","2000-2004") ~ "1995–2004",
+      period %in% c("2005-2009","2010-2014") ~ "2005–2014",
+      period %in% c("2015-2019","2020-2024") ~ "2015–2024",
+      TRUE ~ "Other"
+    )
+  )
+
+rf_vars <- c("hypertension","diabetes","smoking","obesity")
+
+# ---------- 1) Counts & % with 95% CIs by decade × ethnicity × IMD ----------
+rf_long <- dat %>%
+  select(decade, ethnicity_group, imd_quintile, all_of(rf_vars)) %>%
+  pivot_longer(cols = all_of(rf_vars), names_to = "risk_factor", values_to = "flag") %>%
+  filter(!is.na(flag))
+
+rf_prev <- rf_long %>%
+  group_by(risk_factor, decade, ethnicity_group, imd_quintile) %>%
+  summarise(n = n(), n_pos = sum(flag), .groups = "drop") %>%
+  mutate(ci = map2(n_pos, n, ~binom.confint(.x, .y, method = "wilson"))) %>%
+  mutate(
+    mean  = map_dbl(ci, "mean"),
+    lower = map_dbl(ci, "lower"),
+    upper = map_dbl(ci, "upper")
+  ) %>%
+  select(-ci) %>%
+  transmute(
+    RiskFactor = str_to_title(risk_factor),
+    Decade     = decade,
+    Ethnicity  = ethnicity_group,
+    IMD        = imd_quintile,
+    n, n_pos,
+    Percent = mean * 100,
+    LCL     = lower * 100,
+    UCL     = upper * 100,
+    `Percent (95% CI)` = paste0(sprintf("%.1f", Percent), "% (",
+                                sprintf("%.1f", LCL), "–", sprintf("%.1f", UCL), "%)")
+  ) %>%
+  arrange(RiskFactor, Decade, Ethnicity, IMD)
+
+# ---------- 2) ORs vs White at the same IMD, within each decade ----------
+
+run_rf_ors <- function(outcome) {
+  message("Running ", outcome)
+  fml <- as.formula(paste0(outcome, " ~ ethnicity_group * imd_quintile + sex + age_group + period"))
+  fit <- glm(fml, data = dat, family = binomial)
+  
+  # ---------- A) OR vs White within the same IMD ----------
+  # Get EMMs by ethnicity WITHIN each IMD (on link scale so differences = log-ORs)
+  emm_eth_by_imd <- emmeans(fit, ~ ethnicity_group | imd_quintile, type = "link")
+  
+  # Treatment vs control, using White as control, within each IMD stratum
+  vs_white <- contrast(
+    emm_eth_by_imd,
+    method = "trt.vs.ctrl",
+    ref = "White",
+    adjust = "none"
+  )
+  
+  df_white <- as.data.frame(vs_white) %>%
+    mutate(
+      RiskFactor   = str_to_title(outcome),
+      OR           = exp(estimate),
+      LCL          = exp(estimate - 1.96 * SE),
+      UCL          = exp(estimate + 1.96 * SE),
+      `OR (95% CI)`= paste0(sprintf("%.2f", OR), " (",
+                            sprintf("%.2f", LCL), "–", sprintf("%.2f", UCL), ")"),
+      p            = sprintf("%.3f", p.value)
+    ) %>%
+    transmute(
+      RiskFactor,
+      IMD          = imd_quintile,
+      Contrast     = contrast,           # e.g., "Black African - White"
+      `OR (95% CI)`,
+      p,
+      Comparison   = "vs White (same IMD)"
+    )
+  
+  # ---------- B) SES gradients within each ethnicity ----------
+  emm_imd_by_eth <- emmeans(fit, ~ imd_quintile | ethnicity_group, type = "link")
+  
+  # Build full-length named contrast vectors from the factor levels
+  imd_levs <- levels(summary(emm_imd_by_eth)$imd_quintile)
+  make_vec <- function(from, to, levs) {
+    v <- setNames(rep(0, length(levs)), levs)
+    v[from] <-  1
+    v[to]   <- -1
+    v
+  }
+  method_list <- list(
+    `1 vs 3-5` = make_vec("1",  "3-5", imd_levs),
+    `2 vs 3-5` = make_vec("2",  "3-5", imd_levs)
+  )
+  
+  ses_contr <- contrast(emm_imd_by_eth, method = method_list, adjust = "none")
+  
+  df_ses <- as.data.frame(ses_contr) %>%
+    mutate(
+      RiskFactor   = str_to_title(outcome),
+      OR           = exp(estimate),
+      LCL          = exp(estimate - 1.96 * SE),
+      UCL          = exp(estimate + 1.96 * SE),
+      `OR (95% CI)`= paste0(sprintf("%.2f", OR), " (",
+                            sprintf("%.2f", LCL), "–", sprintf("%.2f", UCL), ")"),
+      p            = sprintf("%.3f", p.value)
+    ) %>%
+    transmute(
+      RiskFactor,
+      Ethnicity    = ethnicity_group,
+      Contrast     = contrast,           # "1 vs 3-5" or "2 vs 3-5"
+      `OR (95% CI)`,
+      p,
+      Comparison   = "SES gradient (within ethnicity)"
+    )
+  
+  bind_rows(df_white, df_ses)
+}
+
+# Run for all outcomes
+rf_vars <- c("hypertension","diabetes","smoking","obesity")
+rf_ors  <- map_dfr(rf_vars, run_rf_ors)
+
+# ---------- 3) Temporal trend — do gaps vs White change across decades? ----------
+library(dplyr)
+library(tidyr)
+library(emmeans)
+library(purrr)
+library(stringr)
+library(broom)
+
+# -------------------------------------------------------------------
+# 2A) ORs vs White within the same IMD, BY DECADE (+ SES gradients)
+# -------------------------------------------------------------------
+run_rf_ors_by_decade <- function(outcome) {
+  message("ORs by decade for ", outcome)
+  # ethnicity × IMD × decade + adjusters
+  fml <- as.formula(paste0(
+    outcome, " ~ ethnicity_group * imd_quintile * decade + sex + age_group"
+  ))
+  fit <- glm(fml, data = dat, family = binomial)
+
+  # ----- A) OR vs White (same IMD) within each decade -----
+  # On the link (logit) scale so differences == log-ORs
+  emm_eth <- emmeans(fit, ~ ethnicity_group | imd_quintile + decade, type = "link")
+
+  # For each IMD × decade, compare each ethnicity to White
+  vs_white <- tryCatch(
+    contrast(emm_eth, method = "trt.vs.ctrl", by = c("imd_quintile","decade"),
+             ref = "White", adjust = "none"),
+    error = function(e) NULL
+  )
+
+  df_white <- if (is.null(vs_white)) {
+    tibble()
+  } else {
+    as.data.frame(vs_white) %>%
+      mutate(
+        RiskFactor = str_to_title(outcome),
+        OR  = exp(estimate),
+        LCL = exp(estimate - 1.96 * SE),
+        UCL = exp(estimate + 1.96 * SE),
+        `OR (95% CI)` = sprintf("%.2f (%.2f–%.2f)", OR, LCL, UCL),
+        p = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+        Comparison = "vs White (same IMD)"
+      ) %>%
+      rename(IMD = imd_quintile, Decade = decade, Contrast = contrast) %>%
+      select(RiskFactor, Decade, IMD, Contrast, `OR (95% CI)`, p, Comparison)
+  }
+
+  # ----- B) SES gradients within ETHNICITY, by decade (1 vs 3-5, 2 vs 3-5) -----
+run_rf_ors_by_decade <- function(outcome) {
+  message("ORs by decade for ", outcome)
+
+  # one fit per outcome
+  fml <- as.formula(paste0(
+    outcome, " ~ ethnicity_group * imd_quintile * decade + sex + age_group"
+  ))
+  fit <- glm(fml, data = dat, family = binomial)
+
+  ## ----- A) OR vs White within the same IMD & decade (your existing part) -----
+  emm_eth <- emmeans(fit, ~ ethnicity_group | imd_quintile + decade, type = "link")
+  vs_white <- tryCatch(
+    contrast(emm_eth, method = "trt.vs.ctrl", by = c("imd_quintile","decade"),
+             ref = "White", adjust = "none"),
+    error = function(e) NULL
+  )
+  df_white <- if (is.null(vs_white)) tibble() else
+    as.data.frame(vs_white) |>
+      dplyr::mutate(
+        RiskFactor = stringr::str_to_title(outcome),
+        OR  = exp(estimate),
+        LCL = exp(estimate - 1.96*SE),
+        UCL = exp(estimate + 1.96*SE),
+        `OR (95% CI)` = sprintf("%.2f (%.2f–%.2f)", OR, LCL, UCL),
+        p = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+        Comparison = "vs White (same IMD & decade)"
+      ) |>
+      dplyr::rename(IMD = imd_quintile, Decade = decade, Contrast = contrast) |>
+      dplyr::select(RiskFactor, Decade, IMD, Contrast, `OR (95% CI)`, p, Comparison)
+
+  ## ----- B) REPLACEMENT: SES gradients within ethnicity × decade -----
+  emm_imd_by_eth_dec <- emmeans(
+    fit, ~ imd_quintile | ethnicity_group + decade, type = "link"
+  )
+
+  build_methods <- function(emm_grid) {
+    levs <- levels(summary(emm_grid)$imd_quintile)
+    mk <- function(a,b){ v <- setNames(rep(0,length(levs)), levs); v[a] <- 1; v[b] <- -1; v }
+    list(`1 vs 3-5` = mk("1","3-5"),
+         `2 vs 3-5` = mk("2","3-5"))
+    # add `1 vs 2` = mk("1","2") if you want it
+  }
+
+  ses_contr <- tryCatch(
+    contrast(emm_imd_by_eth_dec,
+             method = build_methods(emm_imd_by_eth_dec),
+             by = c("ethnicity_group","decade"),
+             adjust = "none"),
+    error = function(e) NULL
+  )
+
+  df_ses <- if (is.null(ses_contr)) tibble() else
+    as.data.frame(ses_contr) |>
+      dplyr::mutate(
+        RiskFactor = stringr::str_to_title(outcome),
+        OR  = exp(estimate),
+        LCL = exp(estimate - 1.96*SE),
+        UCL = exp(estimate + 1.96*SE),
+        `OR (95% CI)` = sprintf("%.2f (%.2f–%.2f)", OR, LCL, UCL),
+        p = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+        Comparison = "SES gradient (within ethnicity × decade)"
+      ) |>
+      dplyr::rename(Ethnicity = ethnicity_group, Decade = decade, Contrast = contrast) |>
+      dplyr::select(RiskFactor, Decade, Ethnicity, Contrast, `OR (95% CI)`, p, Comparison)
+
+  # return both tables
+  list(ors_vs_white = df_white, ses_gradients = df_ses)
+}
+
+run_rf_gap_trends <- function(outcome) {
+  message("Widening/narrowing (consecutive) for ", outcome)
+
+  fml <- as.formula(paste0(
+    outcome, " ~ ethnicity_group * imd_quintile * decade + sex + age_group"
+  ))
+  fit <- glm(fml, data = dat, family = binomial)
+
+  emm_eth <- emmeans(fit, ~ ethnicity_group | imd_quintile + decade, type = "link")
+
+  cc <- tryCatch(
+    contrast(emm_eth,
+             interaction = c("trt.vs.ctrl","consec"),
+             by = "imd_quintile",
+             ref = "White",
+             adjust = "none"),
+    error = function(e) NULL
+  )
+  if (is.null(cc)) return(tibble())
+
+  df <- as.data.frame(cc)
+  eth_col <- grep("trt\\.vs\\.ctrl$|^contrast$", names(df), value = TRUE)[1]
+  dec_col <- grep("consec$", names(df), value = TRUE)[1]
+
+  df |>
+    dplyr::mutate(
+      RiskFactor  = stringr::str_to_title(outcome),
+      RatioChange = exp(estimate),
+      LCL = exp(estimate - 1.96*SE),
+      UCL = exp(estimate + 1.96*SE),
+      `Change in OR (95% CI)` = sprintf("%.2f (%.2f–%.2f)", RatioChange, LCL, UCL),
+      p = ifelse(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+      Direction = dplyr::case_when(
+        RatioChange > 1 & suppressWarnings(as.numeric(p.value)) < 0.05 ~ "widened",
+        RatioChange < 1 & suppressWarnings(as.numeric(p.value)) < 0.05 ~ "narrowed",
+        TRUE ~ "no clear change"
+      )
+    ) |>
+    tidyr::separate_wider_delim(
+      !!rlang::sym(eth_col), delim = " - ",
+      names = c("Ethnicity","RefEthnicity"), too_many = "merge"
+    ) |>
+    dplyr::rename(IMD = imd_quintile, DecadeChange = !!rlang::sym(dec_col)) |>
+    dplyr::select(RiskFactor, IMD, Ethnicity, RefEthnicity, DecadeChange,
+                  `Change in OR (95% CI)`, p, Direction)
+}
+
+rf_vars <- c("hypertension","diabetes","smoking","obesity")
+
+# ORs by decade (vs White & SES gradients within ethnicity×decade)
+ors_lists <- purrr::map(rf_vars, run_rf_ors_by_decade)
+ors_vs_white_decade   <- dplyr::bind_rows(purrr::map(ors_lists, "ors_vs_white"))
+ses_gradients_decade  <- dplyr::bind_rows(purrr::map(ors_lists, "ses_gradients"))
+
+# Widening / narrowing (consecutive decades)
+gap_trends_consec <- purrr::map_dfr(rf_vars, run_rf_gap_trends)
+
+# Save everything
+# =============================
+# Save all outputs to a clean Excel
+# =============================
+
+library(dplyr)
+library(stringr)
+library(writexl)
+library(tidyr)
+library(purrr)
+
+# ---- helpers ----
+fmt_pct  <- function(x) sprintf("%.1f", x)
+fmt_orci <- function(or, l, u) sprintf("%.2f (%.2f–%.2f)", or, l, u)
+fmt_p    <- function(p) ifelse(is.na(p), NA_character_,
+                               ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)))
+
+# 1) Prevalence table cleanup (rf_prev)
+rf_prev_out <-
+  rf_prev %>%
+  mutate(
+    Percent = round(Percent, 1),
+    LCL     = round(LCL, 1),
+    UCL     = round(UCL, 1),
+    `Percent (95% CI)` = paste0(fmt_pct(Percent), "% (", fmt_pct(LCL), "–", fmt_pct(UCL), "%)")
+  ) %>%
+  select(RiskFactor, Decade, Ethnicity, IMD, n, n_pos, Percent, LCL, UCL, `Percent (95% CI)`) %>%
+  arrange(RiskFactor, Decade, Ethnicity, IMD)
+
+# 2) ORs vs White within same IMD (non-decade model, if you ran rf_ors)
+rf_ors_out <- if (exists("rf_ors")) {
+  rf_ors %>%
+    mutate(p = fmt_p(suppressWarnings(as.numeric(p)))) %>%
+    select(RiskFactor, IMD, Contrast, `OR (95% CI)`, p, Comparison) %>%
+    arrange(RiskFactor, IMD, Contrast)
+} else tibble()
+
+# 3) ORs vs White by decade
+ors_vs_white_decade_out <-
+  ors_vs_white_decade %>%
+  mutate(p = fmt_p(suppressWarnings(as.numeric(p)))) %>%
+  select(RiskFactor, Decade, IMD, Contrast, `OR (95% CI)`, p, Comparison) %>%
+  arrange(RiskFactor, Decade, IMD, Contrast)
+
+# 4) SES gradients (within ethnicity × decade)
+ses_gradients_decade_out <-
+  ses_gradients_decade %>%
+  mutate(p = fmt_p(suppressWarnings(as.numeric(p)))) %>%
+  select(RiskFactor, Decade, Ethnicity, Contrast, `OR (95% CI)`, p, Comparison) %>%
+  arrange(RiskFactor, Decade, Ethnicity, Contrast)
+
+# 5) Widening / narrowing between consecutive decades
+gap_trends_consec_out <-
+  gap_trends_consec %>%
+  mutate(p = fmt_p(suppressWarnings(as.numeric(p)))) %>%
+  select(RiskFactor, IMD, Ethnicity, RefEthnicity, DecadeChange,
+         `Change in OR (95% CI)`, p, Direction) %>%
+  arrange(RiskFactor, IMD, Ethnicity, DecadeChange)
+
+# 6) Optional: counts by Ethnicity × IMD × Decade (denominators view)
+denoms_out <- rf_prev_out %>%
+  group_by(RiskFactor, Decade, Ethnicity, IMD) %>%
+  summarise(n = first(n), .groups = "drop") %>%
+  arrange(RiskFactor, Decade, Ethnicity, IMD)
+
+# ---- write all to Excel ----
+sheets <- list(
+  `1_RF_Prevalence_%_CI`      = rf_prev_out,
+  `2_OR_vsWhite_byDecade`     = ors_vs_white_decade_out,
+  `3_SES_Grad_byEth_Decade`   = ses_gradients_decade_out,
+  `4_GapTrends_Consecutive`   = gap_trends_consec_out
+)
+
+# include non-decade ORs if present
+if (nrow(rf_ors_out) > 0) {
+  sheets <- append(sheets, list(`2a_OR_vsWhite_AllPeriods` = rf_ors_out))
+}
+
+# include denominators
+sheets <- append(sheets, list(`0_Denominators_byCell` = denoms_out))
+
+write_xlsx(sheets, "RF_byDecade_ORs_and_Trends_CLEAN.xlsx")
+
+# Missing things to save -> trends and ses within ethnicity
+
+library(stringr)
+library(dplyr)
+library(tidyr)
+
+# Safe splitter for DecadeChange
+split_decades <- function(x) {
+  # normalize separators to a single token
+  y <- str_replace_all(x %||% "", "\\s*(/|to|→)\\s*", " / ")
+  has_sep <- str_detect(y, " / ")
+  out <- tibble(
+    To   = ifelse(has_sep, str_trim(str_split_fixed(y, " / ", 2)[,1]), str_trim(y)),
+    From = ifelse(has_sep, str_trim(str_split_fixed(y, " / ", 2)[,2]), NA_character_)
+  )
+  out
+}
+
+# Rebuild the tidy long table
+gap_trends_consec_clean_long <- gap_trends_consec %>%
+  bind_cols(split_decades(.$DecadeChange)) %>%  # <- robust split
+  mutate(
+    `Ethnicity vs White` = paste0(Ethnicity, " vs White"),
+    p = fmt_p(p)
+  ) %>%
+  select(RiskFactor, IMD, `Ethnicity vs White`, From, To,
+         `Change in OR (95% CI)`, p, Direction) %>%
+  arrange(RiskFactor, IMD, `Ethnicity vs White`, From)
+
+# Optional wide view (unchanged)
+gap_trends_consec_clean_wide <- gap_trends_consec_clean_long %>%
+  mutate(Header = paste0(RiskFactor, " — ", IMD, " — ", From %||% "", ifelse(!is.na(From), "→", ""), To),
+         Cell   = paste0(`Change in OR (95% CI)`, "; p=", p, " (", Direction, ")")) %>%
+  select(`Ethnicity vs White`, Header, Cell) %>%
+  distinct() %>%
+  pivot_wider(names_from = Header, values_from = Cell) %>%
+  arrange(`Ethnicity vs White`)
+
+writexl::write_xlsx(
+  list(
+    `SES_gradients_byEthDecade_LONG` = ses_gradients_decade_clean_long,
+    `SES_gradients_byEthDecade_WIDE` = ses_gradients_decade_clean_wide,
+    `GapTrends_consec_LONG`          = gap_trends_consec_clean_long,
+    `GapTrends_consec_WIDE`          = gap_trends_consec_clean_wide
+  ),
+  "RF_SES_and_GapTrends_Clean.xlsx"
+)
+
+
+
+# ---------------------------------
+# Render nice tables for publication
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+library(purrr)
+
+# ---------- 1️⃣ Percentages: reshape rf_prev ----------
+tbl_percentages <- rf_prev %>%
+  select(RiskFactor, Decade, Ethnicity, IMD, `Percent (95% CI)`) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = `Percent (95% CI)`
+  ) %>%
+  arrange(Ethnicity, IMD)
+
+# ---------- 2️⃣ ORs (raw, pooled over IMD & decade model if available) ----------
+tbl_ORs <- ors_vs_white_decade %>%
+  select(RiskFactor, Decade, IMD, Contrast, `OR (95% CI)`) %>%
+  separate_wider_delim(Contrast, delim = " - ",
+                       names = c("Ethnicity", "RefEthnicity"), too_many = "merge") %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = `OR (95% CI)`
+  ) %>%
+  arrange(Ethnicity, IMD)
+
+# ---------- 3️⃣ Comparison vs White (explicit reference in cell) ----------
+tbl_vsWhite <- ors_vs_white_decade %>%
+  mutate(
+    Ethnicity = str_extract(Contrast, "^[^-]+"),
+    RefEthnicity = "White (ref)",
+    Cell = paste0(`OR (95% CI)`, "\nref: ", RefEthnicity)
+  ) %>%
+  select(RiskFactor, Decade, IMD, Ethnicity, Cell) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = Cell
+  ) %>%
+  arrange(Ethnicity, IMD)
+
+# ---------- 4️⃣ SES gradient (within ethnicity, explicit ref IMD 3–5) ----------
+tbl_SES <- ses_gradients_decade %>%
+  mutate(
+    Cell = paste0(`OR (95% CI)`, "\nref: IMD 3–5")
+  ) %>%
+  select(RiskFactor, Decade, Ethnicity, Contrast, Cell) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = Cell
+  ) %>%
+  arrange(Ethnicity, Contrast)
+
+# ---------- Save nicely ----------
+writexl::write_xlsx(list(
+  `1_Percentages`       = tbl_percentages,
+  `2_ORs_Raw`           = tbl_ORs,
+  `3_Comparison_vsWhite`= tbl_vsWhite,
+  `4_SES_Gradients`     = tbl_SES
+), "RF_Summary_Tables_byEthIMD.xlsx")
+
+# And getting the p-values there
+
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(writexl)
+
+# ---------- helper to tidy p-values ----------
+fmt_p <- function(x) {
+  # keep "<0.001" as-is; otherwise show to 3 d.p.
+  suppressWarnings({
+    nx <- as.numeric(x)
+    ifelse(is.na(nx), as.character(x),
+           ifelse(nx < 0.001, "<0.001", sprintf("%.3f", nx)))
+  })
+}
+
+# ---------- 1) Percentages (unchanged) ----------
+tbl_percentages <- rf_prev %>%
+  select(RiskFactor, Decade, Ethnicity, IMD, `Percent (95% CI)`) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = `Percent (95% CI)`
+  ) %>%
+  arrange(Ethnicity, IMD)
+
+# ---------- 2) OR vs White (explicit ref + p in cell) ----------
+tbl_vsWhite <- ors_vs_white_decade %>%
+  mutate(
+    Ethnicity = str_extract(Contrast, "^[^-]+"),
+    p_fmt = fmt_p(p),
+    Cell = paste0(`OR (95% CI)`, "; p=", p_fmt,
+                  "\nref: White (same IMD & decade)")
+  ) %>%
+  select(RiskFactor, Decade, IMD, Ethnicity, Cell) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = Cell
+  ) %>%
+  arrange(Ethnicity, IMD)
+
+# ---------- 3) SES gradients within ethnicity × decade (explicit ref + p) ----------
+tbl_SES <- ses_gradients_decade %>%
+  mutate(
+    p_fmt = fmt_p(p),
+    Cell = paste0(`OR (95% CI)`, "; p=", p_fmt,
+                  "\nref: IMD 3–5 (within ethnicity & decade)")
+  ) %>%
+  select(RiskFactor, Decade, Ethnicity, Contrast, Cell) %>%
+  pivot_wider(
+    names_from = c(RiskFactor, Decade),
+    values_from = Cell
+  ) %>%
+  arrange(Ethnicity, factor(Contrast, levels = c("1 vs 3-5","2 vs 3-5")))
+
+# ---------- (optional) Notes sheet ----------
+notes <- tibble::tibble(
+  Note = c(
+    "Percentages are point estimates with Wilson 95% CI.",
+    "OR vs White: each cell compares the named Ethnicity to White within the SAME IMD and decade; adjusted for sex & age_group.",
+    "SES gradients: each cell compares IMD 1 vs 3–5 or IMD 2 vs 3–5 within the SAME ethnicity and decade; adjusted for sex & age_group.",
+    "p-values are Wald tests from the emmeans contrast on the logit scale."
+  )
+)
+
+# ---------- Save clean Excel ----------
+write_xlsx(list(
+  `1_Percentages_(%+95CI)`   = tbl_percentages,
+  `2_OR_vsWhite_(ref_shown)` = tbl_vsWhite,
+  `3_SES_gradients_(ref_IMD3-5)` = tbl_SES,
+  `Notes` = notes
+), "RF_Summary_Tables_byEthIMD.xlsx")
+
+#### Fixing the giant ORS in the OR vs White same decade same IMD
+library(dplyr)
+library(broom)
+library(emmeans)
+library(stringr)
+library(purrr)
+
+# ------------------------------------------------------------------
+#  Helper: compute OR for one contrast robustly
+# ------------------------------------------------------------------
+compute_or <- function(outcome, decade_sel, eth_sel, imd_sel, ref_eth = "White", ref_imd = "3-5") {
+  
+  message("→ ", str_to_title(outcome), " | ", decade_sel, " | ", eth_sel, " ", imd_sel, " vs ", ref_eth, " ", ref_imd)
+  
+  # Subset
+  dsub <- dat %>%
+    filter(decade == decade_sel,
+           (ethnicity_group == eth_sel & imd_quintile == imd_sel) |
+           (ethnicity_group == ref_eth & imd_quintile == ref_imd)) %>%
+    mutate(group = if_else(ethnicity_group == ref_eth & imd_quintile == ref_imd, 
+                           "Ref", "Eth"))
+  
+  # Build 2×2 table
+  var <- sym(outcome)
+  tab <- dsub %>%
+    count(group, !!var) %>%
+    tidyr::complete(group = c("Eth","Ref"), !!var := c(0L,1L), fill = list(n = 0L)) %>%
+    tidyr::pivot_wider(names_from = c(group, !!var), values_from = n) %>%
+    mutate(a = Eth_1, b = Eth_0, c = Ref_1, d = Ref_0)
+  
+  if (nrow(tab) == 0) return(tibble())
+  
+  a <- tab$a; b <- tab$b; c <- tab$c; d <- tab$d
+  
+  # Check for zero cells
+  if (any(c(a,b,c,d) == 0)) {
+    # Haldane–Anscombe continuity correction
+    a2 <- a + 0.5; b2 <- b + 0.5; c2 <- c + 0.5; d2 <- d + 0.5
+    lor <- log((a2*d2)/(b2*c2))
+    se  <- sqrt(1/a2 + 1/b2 + 1/c2 + 1/d2)
+    OR  <- exp(lor)
+    LCL <- exp(lor - 1.96*se)
+    UCL <- exp(lor + 1.96*se)
+    p   <- 2 * pnorm(-abs(lor/se))
+    method <- "CC (Haldane–Anscombe)"
+  } else {
+    # Standard logit model
+    fit <- glm(!!var ~ group, data = dsub, family = binomial)
+    est <- broom::tidy(fit)
+    OR  <- exp(est$estimate[2])
+    LCL <- exp(est$estimate[2] - 1.96 * est$std.error[2])
+    UCL <- exp(est$estimate[2] + 1.96 * est$std.error[2])
+    p   <- est$p.value[2]
+    method <- "Standard GLM"
+  }
+  
+  tibble(
+    RiskFactor = str_to_title(outcome),
+    Decade     = decade_sel,
+    Ethnicity  = eth_sel,
+    IMD        = imd_sel,
+    RefEth     = ref_eth,
+    RefIMD     = ref_imd,
+    n_Eth      = a + b,
+    n_Ref      = c + d,
+    Pos_Eth    = a,
+    Pos_Ref    = c,
+    `OR (95% CI)` = sprintf("%.2f (%.2f–%.2f)", OR, LCL, UCL),
+    p = ifelse(p < 0.001, "<0.001", sprintf("%.3f", p)),
+    Method = method
+  )
+}
+
+# ------------------------------------------------------------------
+#  Run for the three requested contrasts
+# ------------------------------------------------------------------
+
+results_three <- bind_rows(
+  compute_or("hypertension", "2005–2014", "Black Caribbean", "3-5"),
+  compute_or("diabetes",     "1995–2004", "Black African",   "3-5"),
+  compute_or("smoking",      "1995–2004", "Black African",   "3-5")
+)
+
+results_three
