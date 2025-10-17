@@ -6457,7 +6457,7 @@ dat <- slsr_clean_icd10_prepped %>%
       period %in% c("2015-2019","2020-2024") ~ "2015–2024",
       TRUE ~ "Other"
     )
-  )
+  ) 
 
 rf_vars <- c("hypertension","diabetes","smoking","obesity")
 
