@@ -1,0 +1,269 @@
+# =============================================================================
+# 01: Population denominators
+
+# Inputs
+#   1991.tsv, 2001.tsv, 2011.tsv    ward-level census tables (Nomis)
+#   2021.xlsx                        ward-level census table (ONS)
+#   imd_eng_2004_2007_2010_lsoa01.csv   IMD 2004 and 2010, LSOA level
+#   N195.csv                         IMD 2019 deciles, LSOA level
+#   lambeth_ward_lsoa_list.csv       ward-to-LSOA lookups
+#   southwark_ward_lsoa_list.csv
+#
+# Output
+#   pop_full_interpolated_with_imd.csv
+# =============================================================================
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(readxl)
+library(stringr)
+library(zoo)
+
+census_dir <- "data/census"
+imd_dir    <- "data/imd"
+lookup_dir <- "data/lookups"
+out_dir    <- "output"
+
+
+# -----------------------------------------------------------------------------
+# 1. Analysis categories
+# -----------------------------------------------------------------------------
+
+adult_age_bands <- c("18-19","20-24","25-29","30-34","35-39","40-44","45-49",
+                     "50-54","55-59","60-64","65-69","70-74","75-79","80-84","85+")
+                     
+standardise_age_band <- function(x) {
+  x <- gsub("\u2013|\u2014", "-", as.character(x))
+  x <- gsub("\\s*-\\s*", "-", x)
+  str_trim(x)
+}
+
+group_ethnicity <- function(x) {
+  case_when(
+    str_detect(x, regex("White", ignore_case = TRUE))                      ~ "White",
+    str_detect(x, regex("African$|African: African", ignore_case = TRUE))  ~ "Black African",
+    str_detect(x, regex("Caribbean$|African: Caribbean", ignore_case = TRUE)) ~ "Black Caribbean",
+    str_detect(x, regex("Black British: Other|African: Other Black|Black Other",
+                        ignore_case = TRUE))                              ~ "Black Other",
+    TRUE                                                                   ~ "Other"
+  )
+}
+
+standardise_sex <- function(x) {
+  case_when(
+    x %in% c(1, "1", "M", "Male",   "Males")   ~ "Male",
+    x %in% c(2, "2", "F", "Female", "Females") ~ "Female",
+    TRUE ~ NA_character_
+  )
+}
+
+# -----------------------------------------------------------------------------
+# 2. Catchment wards
+# -----------------------------------------------------------------------------
+
+wards_2001 <- c(
+  # Southwark
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe", "Surrey Docks",
+  "Newington", "East Walworth", "South Bermondsey", "Faraday", "Camberwell Green",
+  # Lambeth
+  "Bishop`s", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour",
+  "Ferndale", "Herne Hill", "Larkhall", "Oval", "Prince`s", "Stockwell",
+  "Thornton", "Tulse Hill", "Vassall"
+)
+
+wards_2011 <- c(
+  "Cathedrals", "Chaucer", "Grange", "Riverside", "Rotherhithe", "Surrey Docks",
+  "Newington", "East Walworth", "South Bermondsey", "Faraday", "Camberwell Green",
+  "Bishop's", "Brixton Hill", "Clapham Common", "Clapham Town", "Coldharbour",
+  "Ferndale", "Herne Hill", "Larkhall", "Oval", "Prince's", "Stockwell",
+  "Thornton", "Tulse Hill", "Vassall"
+)
+
+wards_2021 <- c(
+  "Borough & Bankside", "Camberwell Green", "Chaucer", "Faraday",
+  "London Bridge & West Bermondsey", "Newington (Southwark)", "North Bermondsey",
+  "North Walworth", "Old Kent Road", "Rotherhithe", "South Bermondsey",
+  "St George's (Southwark)", "Surrey Docks", "Waterloo & South Bank",
+  "Vauxhall (Lambeth)", "Kennington (Lambeth)", "Oval",
+  "Stockwell West & Larkhall", "Stockwell East", "Myatt's Fields",
+  "Clapham Town", "Clapham East", "Clapham Common & Abbeville",
+  "Brixton Acre Lane", "Brixton North", "Brixton Rush Common", "Clapham Park",
+  "Brixton Windrush", "Herne Hill & Loughborough Junction", "St Martin's (Lambeth)"
+)
+
+# -----------------------------------------------------------------------------
+# 3. Deprivation quintiles
+# -----------------------------------------------------------------------------
+
+imd_lsoa <- read_csv(file.path(imd_dir, "imd_eng_2004_2007_2010_lsoa01.csv"),
+                     show_col_types = FALSE) %>%
+  rename(rank_2004  = `2004RANK OF IMD (where 1 is most deprived)`,
+         score_2004 = `2004IMD SCORE`,
+         rank_2010  = `2010imd_rank`,
+         score_2010 = `2010imd_score`)
+
+national_cutpoints <- function(score, rank) {
+  s <- score[order(rank)]
+  n <- length(s)
+  c(s[round(0.2 * n)], s[round(0.4 * n)], s[round(0.6 * n)], s[round(0.8 * n)])
+}
+
+cut_2004 <- national_cutpoints(imd_lsoa$score_2004, imd_lsoa$rank_2004)
+cut_2010 <- national_cutpoints(imd_lsoa$score_2010, imd_lsoa$rank_2010)
+
+assign_quintile <- function(score, cuts) {
+  case_when(
+    is.na(score)     ~ NA_integer_,
+    score >= cuts[1] ~ 1L,   # most deprived
+    score >= cuts[2] ~ 2L,
+    score >= cuts[3] ~ 3L,
+    score >= cuts[4] ~ 4L,
+    TRUE             ~ 5L    # least deprived
+  )
+}
+
+ward_lsoa <- bind_rows(
+  read_csv(file.path(lookup_dir, "lambeth_ward_lsoa_list.csv"), show_col_types = FALSE),
+  read_csv(file.path(lookup_dir, "southwark_ward_lsoa_list.csv"), show_col_types = FALSE)
+)
+
+imd_by_ward_2004 <- ward_lsoa %>%
+  left_join(imd_lsoa, by = "LSOA") %>%
+  group_by(ward) %>%
+  summarise(imd_score = mean(score_2004, na.rm = TRUE), .groups = "drop")
+
+imd_by_ward_2010 <- ward_lsoa %>%
+  left_join(imd_lsoa, by = "LSOA") %>%
+  group_by(ward) %>%
+  summarise(imd_score = mean(score_2010, na.rm = TRUE), .groups = "drop")
+
+# -----------------------------------------------------------------------------
+# 4. Census extraction
+# -----------------------------------------------------------------------------
+
+# --- 1991 ---
+df_1991_adults <- read_tsv(file.path(census_dir, "1991.tsv"), show_col_types = FALSE) %>%
+  mutate(
+    sex       = standardise_sex(str_extract(cell, "(?<=\\().*?(?=\\s*:)")),
+    age_group = str_match(cell,
+                  "aged\\s+(\\d{1,2}\\s*-\\s*\\d{1,2}|\\d{1,2}\\+|\\d{1,2}\\s+and\\s+over)")[, 2],
+    age_group = str_replace(age_group, "\\s+and\\s+over", "+"),
+    age_group = standardise_age_band(str_replace_all(age_group, "\\s*", "")),
+    ethnicity_grouped = group_ethnicity(
+                  str_match(cell, "Ethnic group\\s*:\\s*(.*?)\\s*\\)")[, 2])
+  ) %>%
+  filter(!str_detect(cell, "Total persons"), age_group %in% adult_age_bands) %>%
+  left_join(imd_by_ward_2004, by = c("ward_clean" = "ward")) %>%
+  group_by(year = Date, ward = ward_clean, sex, ethnicity_grouped, age_group) %>%
+  summarise(pop_count = sum(value, na.rm = TRUE),
+            imd_score = first(imd_score), .groups = "drop") %>%
+  mutate(imd_quintile = assign_quintile(imd_score, cut_2004))
+
+# --- 2001 ---
+df_2001_adults <- read_tsv(file.path(census_dir, "2001.tsv"), show_col_types = FALSE) %>%
+  mutate(ward = str_remove(`2003 ST ward`, "^\\S+\\s+"),
+         ward = if_else(ward == "Cathedrals", "Cathedral", ward)) %>%
+  filter(!str_detect(`Ethnic Grou`, "All categories"),
+         !str_detect(Age, "All categories"),
+         ward %in% wards_2001) %>%
+  mutate(
+    ethnicity_grouped = group_ethnicity(
+                  str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
+    age_group = str_replace(Age, "^Age ", ""),
+    age_group = str_replace_all(age_group, " to ", "-"),
+    age_group = standardise_age_band(str_replace(age_group, " and over", "+")),
+    age_group = if_else(age_group %in% c("85-89", "90+"), "85+", age_group),
+    sex = standardise_sex(Sex)
+  ) %>%
+  filter(age_group %in% adult_age_bands) %>%
+  left_join(imd_by_ward_2004, by = "ward") %>%
+  group_by(year = Date, ward, sex, ethnicity_grouped, age_group) %>%
+  summarise(pop_count = sum(value, na.rm = TRUE),
+            imd_score = first(imd_score), .groups = "drop") %>%
+  mutate(imd_quintile = assign_quintile(imd_score, cut_2004))
+
+# --- 2011 ---
+df_2011_adults <- read_tsv(file.path(census_dir, "2011.tsv"), show_col_types = FALSE) %>%
+  mutate(ward = str_trim(str_remove(`2011 census merged ward`, "^.*:\\s*"))) %>%
+  filter(!str_detect(`Ethnic Grou`, "All categories"),
+         !str_detect(Age, "All categories"),
+         ward %in% wards_2011) %>%
+  mutate(
+    ethnicity_grouped = group_ethnicity(
+                  str_replace(`Ethnic Grou`, "All categories: Ethnic group: ", "")),
+    age_group = str_replace(Age, "^Age ", ""),
+    age_group = str_replace_all(age_group, " to ", "-"),
+    age_group = standardise_age_band(str_replace(age_group, " and over", "+")),
+    age_group = if_else(age_group %in% c("85-89", "90+"), "85+", age_group),
+    sex = standardise_sex(Sex)
+  ) %>%
+  filter(age_group %in% adult_age_bands) %>%
+  left_join(imd_by_ward_2010 %>% mutate(ward = str_replace(ward, "Cathedral", "Cathedrals")),
+            by = "ward") %>%
+  group_by(year = Date, ward, sex, ethnicity_grouped, age_group) %>%
+  summarise(pop_count = sum(value, na.rm = TRUE),
+            imd_score = first(imd_score), .groups = "drop") %>%
+  mutate(imd_quintile = assign_quintile(imd_score, cut_2010))
+
+# --- 2021 ---
+imd_2019_lsoa <- read_csv(file.path(imd_dir, "N195.csv"), skip = 2,
+                          show_col_types = FALSE) %>%
+  rename(LSOA       = `LSOA code (2011)`,
+         imd_decile = `Index of Multiple Deprivation (IMD) decile - England`)
+
+ward_quintile_2021 <- ward_lsoa_2021 %>%
+  left_join(imd_2019_lsoa, by = c("LSOA_code" = "LSOA")) %>%
+  mutate(imd_quintile = ceiling(imd_decile / 2)) %>%
+  group_by(ward_2021) %>%
+  summarise(imd_quintile = round(mean(imd_quintile, na.rm = TRUE)), .groups = "drop")
+
+age_band_from_single_year <- function(age) {
+  as.character(cut(as.numeric(age),
+    breaks = c(18, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, Inf),
+    labels = adult_age_bands, right = FALSE))
+}
+
+df_2021_adults <- read_excel(file.path(census_dir, "2021.xlsx")) %>%
+  rename(ward      = `Electoral wards and divisions`,
+         sex       = `Sex (2 categories)`,
+         age_code  = `Age (86 categories) Code`,
+         ethnicity = `Ethnic group (20 categories)`,
+         pop_count = Observation) %>%
+  filter(ward %in% wards_2021) %>%
+  mutate(age_group         = age_band_from_single_year(age_code),
+         ethnicity_grouped = group_ethnicity(ethnicity),
+         sex               = standardise_sex(sex)) %>%
+  filter(!is.na(age_group)) %>%
+  left_join(ward_quintile_2021, by = c("ward" = "ward_2021")) %>%
+  group_by(year = 2021, ward, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+# -----------------------------------------------------------------------------
+# 5. Interpolation
+# -----------------------------------------------------------------------------
+
+pop_census_years <- bind_rows(df_1991_adults, df_2001_adults,
+                              df_2011_adults, df_2021_adults) %>%
+  mutate(age_group = standardise_age_band(age_group)) %>%
+  group_by(year, sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  summarise(pop_count = sum(pop_count, na.rm = TRUE), .groups = "drop")
+
+full_grid <- expand_grid(
+  year              = 1991:2024,
+  sex               = unique(pop_census_years$sex),
+  ethnicity_grouped = unique(pop_census_years$ethnicity_grouped),
+  age_group         = unique(pop_census_years$age_group),
+  imd_quintile      = unique(pop_census_years$imd_quintile)
+)
+
+pop_full <- full_grid %>%
+  left_join(pop_census_years,
+            by = c("year","sex","ethnicity_grouped","age_group","imd_quintile")) %>%
+  arrange(sex, ethnicity_grouped, age_group, imd_quintile, year) %>%
+  group_by(sex, ethnicity_grouped, age_group, imd_quintile) %>%
+  mutate(pop_count_interp = zoo::na.approx(pop_count, x = year,
+                                           na.rm = FALSE, rule = 2)) %>%
+  ungroup()
+
+write_csv(pop_full, file.path(out_dir, "pop_full_interpolated_with_imd.csv"))
